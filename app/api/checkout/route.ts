@@ -1,101 +1,89 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
-import { lockInventory, getPlatformFee } from '@/lib/utils';
-import { createConektaOrder } from '@/lib/conekta/client';
+import { createServiceClient } from '@/lib/supabase/server';
+import { getPlatformFee } from '@/lib/utils';
+import { lockInventory } from '@/lib/inventory';
+import { randomUUID } from 'crypto';
+// import { createConektaOrder } from '@/lib/conekta/client'; // TODO: enable when Conekta is configured
 
 export async function POST(req: NextRequest) {
   try {
-    const { eventId, quantity, buyerName, buyerEmail, buyerPhone } = await req.json();
+    const {
+      eventId, quantity, buyerName, buyerEmail, buyerPhone,
+      sessionToken, holderNames,
+    } = await req.json();
 
     if (!eventId || !quantity || !buyerName || !buyerEmail) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    // Authenticate buyer
-    const supabase = await createClient();
+    const supabase = createServiceClient();
 
-    // Fetch event details
-    const { data: event } = await supabase
-      .from('events')
-      .select('*')
-      .eq('id', eventId)
-      .eq('status', 'live')
-      .single();
-
-    if (!event) {
-      return NextResponse.json({ error: 'Event not found or not available' }, { status: 404 });
+    // Validate checkout session token
+    if (!sessionToken) {
+      return NextResponse.json({ error: 'Invalid checkout link' }, { status: 403 });
     }
 
+    const { data: session } = await supabase
+      .from('checkout_sessions')
+      .select('*')
+      .eq('id', sessionToken)
+      .eq('event_id', eventId)
+      .single();
+
+    if (!session)                                  return NextResponse.json({ error: 'Invalid checkout link' }, { status: 403 });
+    if (session.used)                              return NextResponse.json({ error: 'Este enlace ya fue utilizado' }, { status: 403 });
+    if (new Date(session.expires_at) < new Date()) return NextResponse.json({ error: 'El enlace de compra ha expirado' }, { status: 403 });
+
+    // Verify event is live and get ticket type name if applicable
+    const { data: event } = await supabase.from('events').select('*').eq('id', eventId).eq('status', 'live').single();
+    if (!event) return NextResponse.json({ error: 'Event not available' }, { status: 404 });
+
+    let ticketTypeName = 'General';
+    if (session.ticket_type_config_id) {
+      const { data: tc } = await supabase
+        .from('ticket_type_configs')
+        .select('name')
+        .eq('id', session.ticket_type_config_id)
+        .single();
+      if (tc) ticketTypeName = tc.name;
+    }
+
+    // Reserve inventory atomically via DB function (creates order + updates capacity)
+    const orderId = await lockInventory(eventId, quantity, null, buyerEmail, buyerName);
+
+    // Mark session token as used
+    await supabase.from('checkout_sessions').update({ used: true }).eq('id', sessionToken);
+
+    // Create ticket rows — the RPC only updates capacity, not individual ticket records
+    const names: string[] = Array.isArray(holderNames) ? holderNames : [];
+    const ticketInserts = Array.from({ length: quantity }, (_, i) => ({
+      id:    randomUUID(),
+      order_id: orderId,
+      event_id:    eventId,
+      buyer_id:    null,
+      buyer_email: buyerEmail,
+      holder_name: names[i]?.trim() || buyerName,
+      ticket_type: ticketTypeName,
+      status:      'active' as const,
+    }));
+
+    await supabase.from('tickets').insert(ticketInserts);
+
+
+    /* ── Conekta integration (stubbed — enable when provider is configured) ──
     const platformFee = getPlatformFee(quantity);
-    const subtotal = event.price_mxn * quantity;
-    const totalMxn = subtotal + platformFee;
+    const totalMxn    = event.price_mxn * quantity + platformFee;
+    const appUrl      = process.env.NEXT_PUBLIC_APP_URL!;
+    const conektaOrder = await createConektaOrder({ ... });
+    await supabase.from('orders').update({ conekta_order_id: conektaOrder.id }).eq('id', orderId);
+    return NextResponse.json({ orderId, checkoutUrl: conektaOrder.checkout?.url });
+    ── end Conekta stub ── */
 
-    // Lock inventory and create pending order
-    const orderId = await lockInventory(
-      eventId,
-      quantity,
-      null,
-      buyerEmail,
-      buyerName
-    );
+    // Stub: mark order as paid immediately
+    await supabase.from('orders').update({ status: 'paid' }).eq('id', orderId);
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL!;
-
-    // Create Conekta order (amounts in centavos)
-    const conektaOrder = await createConektaOrder({
-      currency: 'MXN',
-      customer_info: {
-        name: buyerName,
-        email: buyerEmail,
-        phone: buyerPhone,
-      },
-      line_items: [
-        {
-          name: event.title,
-          unit_price: Math.round(event.price_mxn * 100),
-          quantity,
-        },
-        {
-          name: 'Cargo por servicio',
-          unit_price: Math.round(platformFee * 100),
-          quantity: 1,
-        },
-      ],
-      charges: [
-        {
-          payment_method: {
-            type: 'card',
-          },
-          amount: Math.round(totalMxn * 100),
-        },
-      ],
-      checkout: {
-        type: 'HostedPayment',
-        allowed_payment_methods: ['card', 'cash', 'bank_transfer'],
-        success_url: `${appUrl}/confirmation/${orderId}`,
-        failure_url: `${appUrl}/checkout/${eventId}?error=payment_failed`,
-      },
-      metadata: {
-        order_id: orderId,
-        event_id: eventId,
-      },
-    });
-
-    // Store Conekta order ID on our order
-    const { createServiceClient } = await import('@/lib/supabase/server');
-    const serviceClient = createServiceClient();
-    await serviceClient
-      .from('orders')
-      .update({ conekta_order_id: conektaOrder.id })
-      .eq('id', orderId);
-
-    return NextResponse.json({
-      orderId,
-      checkoutUrl: conektaOrder.checkout?.url,
-      conektaOrderId: conektaOrder.id,
-    });
+    return NextResponse.json({ orderId });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Checkout failed';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: err instanceof Error ? err.message : 'Checkout failed' }, { status: 500 });
   }
 }

@@ -3,7 +3,19 @@ export type Profile = {
   email: string;
   full_name: string | null;
   role: 'organizer' | 'buyer';
+  status: 'pending' | 'approved';
   conekta_customer_id: string | null;
+  created_at: string;
+};
+
+export type LocationType = 'presencial' | 'en_linea' | 'tba';
+export type PresencialType = 'lugar_unico' | 'origen_destino';
+
+export type Lugar = {
+  id: string;
+  organizer_id: string;
+  name: string;
+  url: string | null;
   created_at: string;
 };
 
@@ -13,11 +25,17 @@ export type Event = {
   title: string;
   description: string | null;
   date: string;
-  venue: string;
+  end_time: string | null;
+  location_type: LocationType;
+  presencial_type: PresencialType | null;
+  venue: string | null;
+  venue_url: string | null;
+  destination: string | null;
+  destination_url: string | null;
   capacity: number;
   tickets_sold: number;
   price_mxn: number;
-  status: 'draft' | 'live' | 'closed' | 'cancelled';
+  status: 'draft' | 'live' | 'closed' | 'cancelled' | 'finalizado';
   conekta_product_id: string | null;
   created_at: string;
 };
@@ -27,10 +45,16 @@ export type EventInsert = {
   title: string;
   description?: string | null;
   date: string;
-  venue: string;
+  end_time?: string | null;
+  location_type: LocationType;
+  presencial_type?: PresencialType | null;
+  venue?: string | null;
+  venue_url?: string | null;
+  destination?: string | null;
+  destination_url?: string | null;
   capacity: number;
   price_mxn: number;
-  status?: 'draft' | 'live' | 'closed' | 'cancelled';
+  status?: 'draft' | 'live' | 'closed' | 'cancelled' | 'finalizado';
   conekta_product_id?: string | null;
   tickets_sold?: number;
 };
@@ -55,9 +79,9 @@ export type Ticket = {
   event_id: string;
   buyer_id: string|null;
   buyer_email: string;
+  holder_name: string | null;
   ticket_type: string;
   seat_label: string | null;
-  qr_code: string;
   status: 'active' | 'redeemed' | 'cancelled' | 'transferred';
   redeemed_at: string | null;
   redeemed_by: string | null;
@@ -67,13 +91,47 @@ export type Ticket = {
   created_at: string;
 };
 
+export type TicketPhase = {
+  id: string;
+  event_id: string;
+  name: string;
+  end_date: string | null;
+  end_on_sold_out: boolean;
+  position: number;
+  created_at: string;
+};
+
+export type TicketTypeConfig = {
+  id: string;
+  phase_id: string;
+  event_id: string;
+  name: string;
+  price_mxn: number;
+  quantity: number;
+  enumerate_from: number;
+  created_at: string;
+};
+
+export type PhaseWithTypes = TicketPhase & { ticket_type_configs: TicketTypeConfig[] };
+
+export type CheckoutSession = {
+  id: string;
+  event_id: string;
+  ticket_type_config_id: string | null;
+  quantity: number;
+  expires_at: string;
+  used: boolean;
+  created_at: string;
+};
+
 export type TicketInsert = {
+  id?: string,
   order_id: string;
   event_id: string;
   buyer_id: string|null;
   buyer_email: string;
+  holder_name?: string | null;
   ticket_type?: string;
-  qr_code: string;
   status?: 'active' | 'redeemed' | 'cancelled' | 'transferred';
   seat_label?: string | null;
   redeemed_at?: string | null;
@@ -98,6 +156,12 @@ export type Database = {
         Update: Partial<EventInsert>;
         Relationships: [];
       };
+      lugares: {
+        Row: Lugar;
+        Insert: Omit<Lugar, 'id' | 'created_at'> & { url?: string | null };
+        Update: Partial<Omit<Lugar, 'id' | 'organizer_id' | 'created_at'>>;
+        Relationships: [];
+      };
       orders: {
         Row: Order;
         Insert: Omit<Order, 'id' | 'created_at'> & { conekta_order_id?: string | null };
@@ -108,6 +172,24 @@ export type Database = {
         Row: Ticket;
         Insert: TicketInsert;
         Update: Partial<Ticket>;
+        Relationships: [];
+      };
+      ticket_phases: {
+        Row: TicketPhase;
+        Insert: Omit<TicketPhase, 'id' | 'created_at'> & { end_date?: string | null; end_on_sold_out?: boolean; position?: number };
+        Update: Partial<Omit<TicketPhase, 'id' | 'event_id' | 'created_at'>>;
+        Relationships: [];
+      };
+      ticket_type_configs: {
+        Row: TicketTypeConfig;
+        Insert: Omit<TicketTypeConfig, 'id' | 'created_at'> & { enumerate_from?: number };
+        Update: Partial<Omit<TicketTypeConfig, 'id' | 'phase_id' | 'event_id' | 'created_at'>>;
+        Relationships: [];
+      };
+      checkout_sessions: {
+        Row: CheckoutSession;
+        Insert: Omit<CheckoutSession, 'id' | 'created_at'> & { expires_at?: string; used?: boolean };
+        Update: Partial<Pick<CheckoutSession, 'used'>>;
         Relationships: [];
       };
     };

@@ -2,6 +2,9 @@ import { createClient, createServiceClient } from '@/lib/supabase/server';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
 import { formatMXN, formatDate } from '@/lib/utils';
+import EventTabs from './EventTabs';
+import CheckoutLinkGenerator from './CheckoutLinkGenerator';
+import type { PhaseWithTypes } from '@/lib/supabase/types';
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -31,18 +34,24 @@ export default async function OrganizerEventPage({ params }: Props) {
     .eq('event_id', id)
     .order('created_at', { ascending: false });
 
-  // Fetch buyer names from orders separately to avoid join type errors
   const orderIds = [...new Set((tickets ?? []).map((t) => t.order_id))];
   const { data: orders } = orderIds.length
     ? await serviceClient.from('orders').select('id, buyer_name').in('id', orderIds)
     : { data: [] };
   const orderMap = Object.fromEntries((orders ?? []).map((o) => [o.id, o.buyer_name]));
 
+  const { data: phasesData } = await serviceClient
+    .from('ticket_phases')
+    .select('*, ticket_type_configs(*)')
+    .eq('event_id', id)
+    .order('position');
+
   const statusColors: Record<string, string> = {
-    active: 'bg-green-100 text-green-700',
-    redeemed: 'bg-gray-100 text-gray-600',
-    cancelled: 'bg-red-100 text-red-600',
+    active:      'bg-green-100 text-green-700',
+    redeemed:    'bg-gray-100 text-gray-600',
+    cancelled:   'bg-red-100 text-red-600',
     transferred: 'bg-blue-100 text-blue-700',
+    finalizado:  'bg-blue-100 text-blue-700',
   };
 
   return (
@@ -56,14 +65,16 @@ export default async function OrganizerEventPage({ params }: Props) {
           <h1 className="text-2xl font-bold text-gray-900">{ev.title}</h1>
           <p className="text-gray-600 text-sm mt-1">{formatDate(ev.date)} · {ev.venue}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          {ev.status === 'live' && (
+            <CheckoutLinkGenerator eventId={id} phases={(phasesData ?? []) as PhaseWithTypes[]} />
+          )}
           <Link
             href={`/dashboard/events/${id}/edit`}
             className="border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm hover:bg-gray-50"
           >
             Editar
           </Link>
-          {/* CSV download */}
           <a
             href={`/api/events/${id}/attendees.csv`}
             className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700"
@@ -94,46 +105,14 @@ export default async function OrganizerEventPage({ params }: Props) {
         </div>
       </div>
 
-      {/* Attendee list */}
-      <h2 className="text-lg font-semibold text-gray-900 mb-3">Asistentes</h2>
-      {!tickets?.length ? (
-        <p className="text-gray-500 text-sm py-8 text-center">Aún no hay boletos vendidos.</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="border-b border-gray-200 text-left">
-                <th className="pb-3 font-semibold text-gray-600">Nombre</th>
-                <th className="pb-3 font-semibold text-gray-600">Correo</th>
-                <th className="pb-3 font-semibold text-gray-600">Tipo</th>
-                <th className="pb-3 font-semibold text-gray-600">Estado</th>
-                <th className="pb-3 font-semibold text-gray-600">Canjeado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tickets.map((ticket) => {
-                return (
-                  <tr key={ticket.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-3 text-gray-900">{orderMap[ticket.order_id] ?? '—'}</td>
-                    <td className="py-3 text-gray-600">{ticket.buyer_email}</td>
-                    <td className="py-3 text-gray-600">{ticket.ticket_type}</td>
-                    <td className="py-3">
-                      <span className={`px-2 py-1 rounded text-xs font-medium ${statusColors[ticket.status]}`}>
-                        {ticket.status}
-                      </span>
-                    </td>
-                    <td className="py-3 text-gray-500 text-xs">
-                      {ticket.redeemed_at
-                        ? new Date(ticket.redeemed_at).toLocaleString('es-MX')
-                        : '—'}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* Tabs: Asistentes + Inventario de Boletos */}
+      <EventTabs
+        eventId={id}
+        tickets={tickets ?? []}
+        orderMap={orderMap}
+        statusColors={statusColors}
+        phases={(phasesData ?? []) as PhaseWithTypes[]}
+      />
     </div>
   );
 }

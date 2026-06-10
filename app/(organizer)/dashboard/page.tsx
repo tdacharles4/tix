@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { formatMXN, formatDate } from '@/lib/utils';
+import LogoutButton from './LogoutButton';
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -11,6 +12,15 @@ export default async function DashboardPage() {
   // user is non-null past this point; redirect() throws so TS needs the assertion
   const uid = user!.id;
 
+  // Auto-finalize events whose end_time (or date) has passed
+  const now = new Date().toISOString();
+  await supabase
+    .from('events')
+    .update({ status: 'finalizado' })
+    .eq('organizer_id', uid)
+    .in('status', ['draft', 'live'])
+    .or(`end_time.lt.${now},and(end_time.is.null,date.lt.${now})`);
+
   const { data: events } = await supabase
     .from('events')
     .select('*')
@@ -18,22 +28,26 @@ export default async function DashboardPage() {
     .order('date', { ascending: false });
 
   const statusColors: Record<string, string> = {
-    draft: 'bg-gray-100 text-gray-700',
-    live: 'bg-green-100 text-green-700',
-    closed: 'bg-yellow-100 text-yellow-700',
-    cancelled: 'bg-red-100 text-red-700',
+    draft:      'bg-gray-100 text-gray-700',
+    live:       'bg-green-100 text-green-700',
+    closed:     'bg-yellow-100 text-yellow-700',
+    cancelled:  'bg-red-100 text-red-700',
+    finalizado: 'bg-blue-100 text-blue-700',
   };
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-2xl font-bold text-gray-900">Mis eventos</h1>
-        <Link
-          href="/dashboard/events/new"
-          className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700"
-        >
-          + Nuevo evento
-        </Link>
+        <div className="flex items-center gap-4">
+          <LogoutButton />
+          <Link
+            href="/dashboard/events/new"
+            className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700"
+          >
+            + Nuevo evento
+          </Link>
+        </div>
       </div>
 
       {!events?.length ? (

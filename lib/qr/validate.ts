@@ -2,41 +2,43 @@ import { createServiceClient } from '@/lib/supabase/server';
 
 export type ValidationResult =
   | { valid: true; ticket: Record<string, unknown>; event: Record<string, unknown>; buyer: Record<string, unknown> }
-  | { valid: false; reason: 'already_redeemed' | 'cancelled' | 'transferred' | 'not_found' };
+  | { valid: false; reason: 'already_redeemed' | 'cancelled' | 'transferred' | 'not_found' | 'wrong_event' };
 
 export async function validateAndRedeemTicket(
   ticketId: string,
+  eventId: string,
   redeemedBy: string
 ): Promise<ValidationResult> {
   const supabase = createServiceClient();
 
-  const { data: ticket, error } = await supabase
-    .from('tickets')
-    .select('*, events(*), profiles(*)')
-    .eq('id', ticketId)
-    .single();
+  const { data: rows, error } = await supabase.rpc('redeem_ticket', {
+    p_ticket_id: ticketId,
+    p_event_id: eventId,
+    p_scanned_by: redeemedBy,
+  });
+  if (error) throw error;
+  const redeemed = rows?.[0];
 
-  if (error || !ticket) return { valid: false, reason: 'not_found' };
+  if (redeemed) {
+    const { data: full } = await supabase
+      .from('tickets')
+      .select('*, events(*), profiles(*)')
+      .eq('id', ticketId)
+      .single();
 
-  if (ticket.status === 'redeemed') return { valid: false, reason: 'already_redeemed' };
-  if (ticket.status === 'cancelled') return { valid: false, reason: 'cancelled' };
-  if (ticket.status === 'transferred') return { valid: false, reason: 'transferred' };
+      return {
+        valid: true,
+        ticket: full ?? redeemed,
+        event: (full as Record<string, unknown>)?.events as Record<string, unknown>,
+        buyer: (full as Record<string, unknown>)?.profiles as Record<string, unknown>,
+      };
+  }
 
-  const { error: updateError } = await supabase
-    .from('tickets')
-    .update({
-      status: 'redeemed',
-      redeemed_at: new Date().toISOString(),
-      redeemed_by: redeemedBy,
-    })
-    .eq('id', ticketId);
+  const { data: ticket } = await supabase.from('tickets').select('status, event_id').eq('id', ticketId).single();
+  if (!ticket)                          return { valid: false, reason: 'not_found' };
+  if (ticket.event_id !== eventId)      return { valid: false, reason: 'wrong_event' }
+  if (ticket.status === 'cancelled')    return { valid: false, reason: 'cancelled' };
+  if (ticket.status === 'transferred')  return { valid: false, reason: 'transferred' };
+  return { valid: false, reason: 'already_redeemed' };
 
-  if (updateError) throw updateError;
-
-  return {
-    valid: true,
-    ticket,
-    event: (ticket as Record<string, unknown>).events as Record<string, unknown>,
-    buyer: (ticket as Record<string, unknown>).profiles as Record<string, unknown>,
-  };
 }

@@ -53,6 +53,8 @@ export default function CheckinPage() {
         try {
           const res = await fetch(`/api/tickets/${decodedText}/validate`, {
             method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ eventId }),
           });
           const data = await res.json();
           setResult(data);
@@ -86,6 +88,7 @@ export default function CheckinPage() {
     cancelled: 'Boleto cancelado',
     transferred: 'Boleto transferido',
     not_found: 'Boleto no encontrado',
+    wrong_event: 'Boleto pertenece a otro evento',
   };
 
   return (

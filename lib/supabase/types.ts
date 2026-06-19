@@ -208,6 +208,10 @@ export type Database = {
         };
         Returns: string;
       };
+      redeem_ticket: {
+        Args: { p_ticket_id: string; p_event_id: string; p_scanned_by: string };
+        Returns: Ticket[];
+      };
       release_inventory: {
         Args: { p_event_id: string; p_quantity: number };
         Returns: void;

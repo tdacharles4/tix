@@ -7,6 +7,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  const { eventId } = await req.json();
 
   // Check-in staff must be authenticated
   const supabase = await createClient();
@@ -16,7 +17,7 @@ export async function POST(
   }
 
   try {
-    const result = await validateAndRedeemTicket(id, user.email ?? user.id);
+    const result = await validateAndRedeemTicket(id, eventId, user.email ?? user.id);
     return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Validation failed';

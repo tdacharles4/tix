@@ -1,71 +1,162 @@
 ================================================================================ BOLETEO — TEACHER MODE
-Bug Corrections
+Unit Testing — Process & Plan
 ================================================================================
 
 ────────────────────────────────────────────────────────────────────────────────
-BUG #8 — done 
+SETUP
 ────────────────────────────────────────────────────────────────────────────────
-BUG #9 — 
+No test framework is installed yet (checked package.json — no jest/vitest,
+no test script, no *.test.* files in the repo).
+
+Recommended: Vitest.
+  - Native TS/ESM, no babel config needed.
+  - Can import and call route handler exports (POST/GET) directly with a
+    hand-built NextRequest — no need to spin up a real Next.js server.
+  - Fast watch mode.
+
+Install:
+  npm install -D vitest @vitest/coverage-v8
+
+package.json scripts to add:
+  "test": "vitest run",
+  "test:watch": "vitest"
+
+Suggested layout: colocate as *.test.ts next to the file under test, e.g.
+  lib/qr/validate.test.ts
+  app/api/checkout/route.test.ts
+  app/api/checkout/session/route.test.ts
+
 ────────────────────────────────────────────────────────────────────────────────
+MOCKING STRATEGY — Supabase
 ────────────────────────────────────────────────────────────────────────────────
-BUG #3 — Race condition in ticket redemption (double-scan)
-File: lib/qr/validate.ts (validateAndRedeemTicket), called from
-      app/api/tickets/[id]/validate/route.ts — this is the live check-in path
-      (app/checkin/[eventId]/page.tsx scans a QR and POSTs to
-      /api/tickets/:id/validate, which redeems in the same call).
-Note: app/api/tickets/redeem/route.ts was a second, parallel implementation of
-      this same bug with zero live callers. It has been deleted as dead code —
-      fix the version below, not that one.
+Every route/lib file under test calls createServiceClient() or createClient()
+from lib/supabase/server.ts. Unit tests should mock that module so no network
+call ever reaches Supabase. The query patterns used across the codebase are
+narrow and repeat constantly:
+
+  .from(table).select(cols).eq(col, val)[.eq(col2, val2)].single()
+  .from(table).update(obj).eq(col, val)
+  .from(table).insert(arrOrObj)
+  .rpc(fnName, args)
+
+Build one small reusable fake client (e.g. test/fakeSupabase.ts) that returns
+canned { data, error } per call, configured per test:
+
+  function fakeSupabase(responses: { from?: Record<string, any>; rpc?: Record<string, any> }) {
+    return {
+      from: (table: string) => chainable(responses.from?.[table]),
+      rpc:  (fn: string) => Promise.resolve(responses.rpc?.[fn] ?? { data: null, error: null }),
+    };
+  }
+  // chainable() returns an object whose .select/.eq/.update/.insert/.single
+  // all return `this` except the terminal call, which resolves the canned response.
+
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => fakeSupabase({ ... }),
+  createClient: async () => fakeSupabase({ ... }),
+}));
+
+This tests the TypeScript branching logic, NOT whether Postgres itself
+enforces atomicity — see next section.
+
 ────────────────────────────────────────────────────────────────────────────────
+WHAT UNIT TESTS CAN'T COVER
+────────────────────────────────────────────────────────────────────────────────
+Bug #3's actual fix is a guarantee made by Postgres (UPDATE ... WHERE status =
+'active' RETURNING * is atomic at the transaction level). A mocked Supabase
+client can verify that validateAndRedeemTicket calls the RPC with the right
+args and branches correctly on its response — it cannot prove two concurrent
+calls can't both win. That requires an integration test against a real
+Postgres (local `supabase start` stack or a disposable test schema): fire two
+redeem_ticket RPC calls at the same ticket id concurrently (e.g. Promise.all)
+and assert exactly one returns a row. Keep that as a separate
+integration-test script, not part of the Vitest unit suite.
 
-WHAT:
-validateAndRedeemTicket checks if a ticket is active and then updates it to
-redeemed in two separate database round trips. If two devices scan the same
-QR code at exactly the same time, both can pass the status === 'active' check
-before either write lands, and both will return valid: true — meaning the same
-ticket gets accepted twice.
+────────────────────────────────────────────────────────────────────────────────
+TEST PLAN — BUG #3 (redemption race condition)
+────────────────────────────────────────────────────────────────────────────────
+lib/qr/validate.ts — validateAndRedeemTicket(ticketId, eventId, redeemedBy):
+  1. RPC returns a row → { valid: true, ticket, event, buyer }, hydrated from
+     the follow-up select.
+  2. RPC returns [] / null, fallback ticket.event_id !== eventId →
+     { valid: false, reason: 'wrong_event' }.
+  3. RPC returns [] / null, fallback status === 'cancelled' →
+     { valid: false, reason: 'cancelled' }.
+  4. RPC returns [] / null, fallback status === 'transferred' →
+     { valid: false, reason: 'transferred' }.
+  5. RPC returns [] / null, fallback status === 'redeemed' (event_id matches) →
+     { valid: false, reason: 'already_redeemed' }.
+  6. RPC returns [] / null, fallback select finds no ticket at all →
+     { valid: false, reason: 'not_found' }.
+  7. RPC call errors → function throws (don't swallow).
+  8. Assert supabase.rpc('redeem_ticket', {...}) is called with exactly
+     { p_ticket_id: ticketId, p_event_id: eventId, p_scanned_by: redeemedBy }
+     — this is the test that would have caught the earlier swapped-argument
+     mistake during implementation.
 
-The live update has no .eq('status', 'active') guard at all — it only filters
-on .eq('id', ticketId) — so it's worse than a partial guard: there is no check
-on whether the update actually affected any rows, and nothing stops the write
-from re-applying even if the row changed status between the SELECT and the
-UPDATE. A silent or stale update still returns valid: true to the scanner.
+app/api/tickets/[id]/validate/route.ts:
+  9.  No authenticated user → 401.
+  10. validateAndRedeemTicket resolves → 200 with its result passed through.
+  11. validateAndRedeemTicket throws → 500 with the error message.
+  12. eventId missing from request body → confirm current behavior (it's
+      passed straight through to validateAndRedeemTicket as undefined —
+      decide if that should 400 instead; write the test either way so the
+      behavior is pinned down, not implicit).
 
-WHY IT MATTERS:
-At a busy event with multiple scanners, this is a realistic scenario. Someone
-could screenshot their QR and let two people walk in on the same ticket.
+Integration-only (not Vitest): concurrent redeem_ticket RPC calls against a
+real Postgres — exactly one of two simultaneous calls returns a row.
 
-HOW TO FIX:
-Move the redemption logic into a Postgres RPC function that performs the check
-and update atomically in a single statement:
+────────────────────────────────────────────────────────────────────────────────
+TEST PLAN — BUG #8 (wrong price at checkout)
+────────────────────────────────────────────────────────────────────────────────
+app/api/checkout/route.ts (ticketTypeName / unitPriceOverride block):
+  1. session.ticket_type_config_id is null → unitPriceOverride stays
+     undefined, ticketTypeName stays 'General'.
+  2. session.ticket_type_config_id set, lookup succeeds → ticketTypeName =
+     tc.name, unitPriceOverride = tc.price_mxn (NOT events.price_mxn — this
+     is the exact bug being guarded against).
+  3. session.ticket_type_config_id set but lookup returns no row → falls
+     back to 'General' / undefined override, does not throw. Confirms this
+     fallback is intentional, not an accident.
 
-  UPDATE tickets
-  SET status = 'redeemed',
-      redeemed_at = now(),
-      redeemed_by = p_scanned_by
-  WHERE id = p_ticket_id
-    AND event_id = p_event_id        ← scope to event (also fixes security bug #4 prep)
-    AND status = 'active'
-  RETURNING *;
+lib/inventory.ts — lockInventory:
+  4. Assert supabase.rpc('reserve_tickets', {...}) is called with
+     p_unit_price_override equal to whatever was passed in (or null when
+     undefined) — never silently substituting events.price_mxn.
 
-If RETURNING * gives back a row → redemption succeeded.
-If it gives back nothing → ticket was already redeemed or not active.
-The database handles the race at the transaction level — only one concurrent
-call can win the update.
+────────────────────────────────────────────────────────────────────────────────
+TEST PLAN — BUG #9 (buyer quantity bounded)
+────────────────────────────────────────────────────────────────────────────────
+app/api/checkout/route.ts (cap = Math.min(session.max_quantity,
+event.max_tickets_per_order)):
+  1. quantity within cap → passes, proceeds to lockInventory.
+  2. quantity exactly at cap → passes (boundary).
+  3. quantity above cap → 400, Spanish error message.
+  4. quantity = 0 or negative → 400.
+  5. non-integer quantity (e.g. 2.5) → 400.
+  6. KNOWN OPEN BUG — event.max_tickets_per_order is null (organizer left the
+     field blank when creating the event): Math.min(session.max_quantity,
+     null) coerces to 0, so cap = 0 and every quantity >= 1 is rejected,
+     locking out checkout entirely. This test is EXPECTED TO FAIL until the
+     null-cap lockout is actually fixed (e.g. defaulting the column in the
+     DB, or guarding the Math.min call in code). Write it now as a known-red
+     test so the fix can be verified against it later — do not silently
+     skip it.
 
-validateAndRedeemTicket (and the route that calls it) then simply calls the
-RPC and branches on whether it returned a ticket row or null. No separate
-SELECT needed.
+app/api/checkout/session/route.ts (POST — link generation):
+  7. quantity <= event.max_tickets_per_order → session created, max_quantity
+     stored correctly.
+  8. quantity > event.max_tickets_per_order → 400 at link-generation time.
+  9. event.status !== 'live' → 404 'Event not available'.
+  10. SAME OPEN BUG, inverted effect: event.max_tickets_per_order is null →
+      Number(quantity) > null coerces null to 0, so ANY quantity >= 1 is
+      rejected at link-generation (organizer can't even generate a working
+      checkout link for that event). Also expected to fail until fixed —
+      pin down both manifestations of the same root cause.
 
-BEFORE:
-  SELECT ticket              ← round trip 1
-  check status === 'active'  ← in application code (raceable)
-  UPDATE ticket              ← round trip 2 (no status guard, no row-count check)
-  return valid: true         ← even if update hit 0 rows or status changed mid-flight
-
-AFTER:
-  CALL redeem_ticket RPC     ← single atomic operation
-  if returned row → valid: true
-  if null → valid: false, reason: already_redeemed (or not_found)
+app/api/checkout/session/route.ts (GET — token validation):
+  11. token not found / already used / expired → correct valid:false +
+      reason string for each case.
+  12. valid session → returns { valid: true, max_quantity, ticketTypeConfigId }.
 
 ================================================================================

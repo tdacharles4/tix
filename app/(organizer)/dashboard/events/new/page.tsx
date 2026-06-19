@@ -200,7 +200,8 @@ export default function NewEventPage() {
       ticketTypes: [{ id: '1', name: '', price: '', quantity: '', enumerateFromOne: true, enumerateFrom: '' }],
     },
   ]);
-  
+  const [maxTicketsPerOrder, setMaxTicketsPerOrder] = useState('');
+
 
   useEffect(() => {
     async function loadLugares() {
@@ -345,6 +346,7 @@ export default function NewEventPage() {
         capacity: totalCapacity,
         price_mxn: basePrice,
         status: 'draft',
+        max_tickets_per_order: maxTicketsPerOrder ? parseInt(maxTicketsPerOrder) : undefined,
       })
       .select()
       .single();
@@ -563,6 +565,17 @@ export default function NewEventPage() {
           {/* ── Step 2: Phases + Ticket types ── */}
           {step === 2 && (
             <>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Cantidad máxima de boletos por pedido</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={maxTicketsPerOrder}
+                  onChange={(e) => setMaxTicketsPerOrder(e.target.value)}
+                  className={inputCls}
+                />
+              </div>
+
               {phases.map((phase, pi) => (
                 <div key={phase.id} className="border border-indigo-200 rounded-xl p-4 space-y-4 bg-indigo-50/30">
 

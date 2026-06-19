@@ -17,12 +17,18 @@ export async function POST(req: NextRequest) {
     // Verify event exists and is live
     const { data: event } = await supabase
       .from('events')
-      .select('id, status')
+      .select('id, status, max_tickets_per_order')
       .eq('id', eventId)
       .single();
 
     if (!event || event.status !== 'live') {
       return NextResponse.json({ error: 'Event not available' }, { status: 404 });
+    }
+    if (Number(quantity) > event.max_tickets_per_order) {
+      return NextResponse.json(
+        {error: 'El maximo solicitado excede el limite del evento '},
+        {status: 400},
+      )
     }
 
     const { data: session, error } = await supabase
@@ -30,7 +36,7 @@ export async function POST(req: NextRequest) {
       .insert({
         event_id:              eventId,
         ticket_type_config_id: ticketTypeConfigId ?? null,
-        quantity:              Number(quantity),
+        max_quantity:              Number(quantity),
       })
       .select()
       .single();
@@ -69,7 +75,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     valid:               true,
-    quantity:            session.quantity,
+    max_quantity:            session.max_quantity,
     ticketTypeConfigId:  session.ticket_type_config_id,
   });
 }

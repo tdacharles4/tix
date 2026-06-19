@@ -67,7 +67,7 @@ export default async function OrganizerEventPage({ params }: Props) {
         </div>
         <div className="flex gap-2 flex-wrap">
           {ev.status === 'live' && (
-            <CheckoutLinkGenerator eventId={id} phases={(phasesData ?? []) as PhaseWithTypes[]} />
+            <CheckoutLinkGenerator eventId={id} phases={(phasesData ?? []) as PhaseWithTypes[]} maxTicketsPerOrder={ev.max_tickets_per_order} />
           )}
           <Link
             href={`/dashboard/events/${id}/edit`}

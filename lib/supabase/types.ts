@@ -38,6 +38,7 @@ export type Event = {
   status: 'draft' | 'live' | 'closed' | 'cancelled' | 'finalizado';
   conekta_product_id: string | null;
   created_at: string;
+  max_tickets_per_order: number;
 };
 
 export type EventInsert = {
@@ -57,6 +58,7 @@ export type EventInsert = {
   status?: 'draft' | 'live' | 'closed' | 'cancelled' | 'finalizado';
   conekta_product_id?: string | null;
   tickets_sold?: number;
+  max_tickets_per_order?: number
 };
 
 export type Order = {
@@ -118,7 +120,7 @@ export type CheckoutSession = {
   id: string;
   event_id: string;
   ticket_type_config_id: string | null;
-  quantity: number;
+  max_quantity: number;
   expires_at: string;
   used: boolean;
   created_at: string;

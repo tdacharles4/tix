@@ -6,9 +6,10 @@ import type { PhaseWithTypes } from '@/lib/supabase/types';
 type Props = {
   eventId: string;
   phases: PhaseWithTypes[];
+  maxTicketsPerOrder: number;
 };
 
-export default function CheckoutLinkGenerator({ eventId, phases }: Props) {
+export default function CheckoutLinkGenerator({ eventId, phases, maxTicketsPerOrder }: Props) {
   const [open,       setOpen]       = useState(false);
   const [phaseIdx,   setPhaseIdx]   = useState(0);
   const [configIdx,  setConfigIdx]  = useState(0);
@@ -94,13 +95,13 @@ export default function CheckoutLinkGenerator({ eventId, phases }: Props) {
 
         {/* Quantity */}
         <div>
-          <label className="block text-xs text-gray-500 mb-1">Cantidad</label>
+          <label className="block text-xs text-gray-500 mb-1">Maximo de boletos por compra</label>
           <select
             value={quantity}
             onChange={(e) => setQuantity(Number(e.target.value))}
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
-            {[1,2,3,4,5,6,7,8].map((n) => <option key={n} value={n}>{n}</option>)}
+            {Array.from({ length: maxTicketsPerOrder }, (_, i)=> i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
 

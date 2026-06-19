@@ -38,18 +38,31 @@ export async function POST(req: NextRequest) {
     const { data: event } = await supabase.from('events').select('*').eq('id', eventId).eq('status', 'live').single();
     if (!event) return NextResponse.json({ error: 'Event not available' }, { status: 404 });
 
+    const cap = Math.min(session.max_quantity, event.max_tickets_per_order);
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > cap) {
+      return NextResponse.json(
+        { error: `Cantidad invalida. Maxicmo ${cap} boletos.`},
+        { status: 400 },
+      )
+    }
+
     let ticketTypeName = 'General';
+    let unitPriceOverride: number | undefined;
+
     if (session.ticket_type_config_id) {
       const { data: tc } = await supabase
         .from('ticket_type_configs')
-        .select('name')
+        .select('name, price_mxn')
         .eq('id', session.ticket_type_config_id)
         .single();
-      if (tc) ticketTypeName = tc.name;
+      if (tc) {
+        ticketTypeName = tc.name;
+        unitPriceOverride = tc.price_mxn;
+      }
     }
 
     // Reserve inventory atomically via DB function (creates order + updates capacity)
-    const orderId = await lockInventory(eventId, quantity, null, buyerEmail, buyerName);
+    const orderId = await lockInventory(eventId, quantity, null, buyerEmail, buyerName, unitPriceOverride);
 
     // Mark session token as used
     await supabase.from('checkout_sessions').update({ used: true }).eq('id', sessionToken);

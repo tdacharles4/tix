@@ -1,95 +1,35 @@
-================================================================================
-BOLETEO — TEACHER MODE
+================================================================================ BOLETEO — TEACHER MODE
 Bug Corrections
 ================================================================================
 
 ────────────────────────────────────────────────────────────────────────────────
-BUG #8 — Wrong price used at checkout
-File: app/api/checkout/route.ts
+BUG #8 — done 
 ────────────────────────────────────────────────────────────────────────────────
-
-WHAT:
-The checkout route always charges event.price_mxn regardless of which ticket
-type the buyer is purchasing. ticket_type_configs has its own price_mxn column
-because different types (e.g. VIP, General, Early Bird) can have different
-prices. The session already knows which type via ticket_type_config_id, but
-only the name is being fetched from it — not the price.
-
-WHY IT MATTERS:
-A buyer purchasing a VIP ticket (e.g. $800 MXN) could be charged the base
-event price (e.g. $200 MXN) instead. This is a direct billing error that
-silently undercharges every purchase linked to a non-default ticket type.
-
-HOW TO FIX:
-1. In the ticket_type_configs query (around line 43), add price_mxn to the
-   select: .select('name, price_mxn')
-
-2. If a ticket type is found and it has a price, use that price instead of
-   event.price_mxn when calling lockInventory / the reserve_tickets RPC.
-
-3. The reserve_tickets RPC currently computes:
-     v_price := v_event.price_mxn * p_quantity
-   It needs to accept an optional p_unit_price parameter. When provided, use
-   that. When null, fall back to v_event.price_mxn. This keeps the RPC
-   backward compatible.
-
-BEFORE (simplified):
-  fetch ticket type → get name only
-  lockInventory uses event.price_mxn always
-
-AFTER:
-  fetch ticket type → get name + price_mxn
-  if ticket type has price → pass it to lockInventory as unit price
-  lockInventory / RPC uses that price instead of event.price_mxn
-
-
+BUG #9 — 
 ────────────────────────────────────────────────────────────────────────────────
-BUG #9 — Buyer-supplied quantity not validated against session
-File: app/api/checkout/route.ts
-────────────────────────────────────────────────────────────────────────────────
-
-WHAT:
-When an organizer generates a checkout link, checkout_sessions.quantity is set
-to the exact number of tickets that link is for. The checkout route receives
-quantity from the request body but never checks it against session.quantity.
-A buyer (or anyone with the link) can submit any quantity they want.
-
-WHY IT MATTERS:
-An attacker could send quantity: 100 and reserve 100 tickets through a link
-that was only meant for 2. The inventory lock (reserve_tickets RPC) will
-happily honor it if capacity allows. The organizer loses control over how
-many tickets each link grants.
-
-HOW TO FIX:
-After validating the session (confirming it exists, is not used, and is not
-expired), discard the request body's quantity entirely and use session.quantity
-as the authoritative value for all downstream operations.
-
-BEFORE:
-  const { quantity } = await req.json()   ← attacker controls this
-  lockInventory(eventId, quantity, ...)   ← used directly
-
-AFTER:
-  const { ... } = await req.json()        ← quantity from body ignored
-  const quantity = session.quantity       ← locked in by organizer at link creation
-  lockInventory(eventId, quantity, ...)   ← safe
-
-
 ────────────────────────────────────────────────────────────────────────────────
 BUG #3 — Race condition in ticket redemption (double-scan)
-File: app/api/tickets/redeem/route.ts
+File: lib/qr/validate.ts (validateAndRedeemTicket), called from
+      app/api/tickets/[id]/validate/route.ts — this is the live check-in path
+      (app/checkin/[eventId]/page.tsx scans a QR and POSTs to
+      /api/tickets/:id/validate, which redeems in the same call).
+Note: app/api/tickets/redeem/route.ts was a second, parallel implementation of
+      this same bug with zero live callers. It has been deleted as dead code —
+      fix the version below, not that one.
 ────────────────────────────────────────────────────────────────────────────────
 
 WHAT:
-The redeem endpoint checks if a ticket is active and then updates it to
+validateAndRedeemTicket checks if a ticket is active and then updates it to
 redeemed in two separate database round trips. If two devices scan the same
 QR code at exactly the same time, both can pass the status === 'active' check
 before either write lands, and both will return valid: true — meaning the same
 ticket gets accepted twice.
 
-The .eq('status', 'active') guard on the update helps but is not enough:
-there is no check on whether the update actually affected any rows. A silent
-0-row update still returns valid: true to the scanner.
+The live update has no .eq('status', 'active') guard at all — it only filters
+on .eq('id', ticketId) — so it's worse than a partial guard: there is no check
+on whether the update actually affected any rows, and nothing stops the write
+from re-applying even if the row changed status between the SELECT and the
+UPDATE. A silent or stale update still returns valid: true to the scanner.
 
 WHY IT MATTERS:
 At a busy event with multiple scanners, this is a realistic scenario. Someone
@@ -113,14 +53,15 @@ If it gives back nothing → ticket was already redeemed or not active.
 The database handles the race at the transaction level — only one concurrent
 call can win the update.
 
-The API route then simply calls the RPC and branches on whether it returned
-a ticket row or null. No separate SELECT needed.
+validateAndRedeemTicket (and the route that calls it) then simply calls the
+RPC and branches on whether it returned a ticket row or null. No separate
+SELECT needed.
 
 BEFORE:
   SELECT ticket              ← round trip 1
   check status === 'active'  ← in application code (raceable)
-  UPDATE ticket              ← round trip 2 (no row-count check)
-  return valid: true         ← even if update hit 0 rows
+  UPDATE ticket              ← round trip 2 (no status guard, no row-count check)
+  return valid: true         ← even if update hit 0 rows or status changed mid-flight
 
 AFTER:
   CALL redeem_ticket RPC     ← single atomic operation

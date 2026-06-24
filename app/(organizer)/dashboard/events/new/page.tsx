@@ -332,6 +332,8 @@ export default function NewEventPage() {
         ? { venue: venue.trim(), venue_url: venueUrl.trim() || null, destination: null, destination_url: null, presencial_type: 'lugar_unico' as PresencialType }
         : { venue: venue.trim(), venue_url: venueUrl.trim() || null, destination: destination.trim() || null, destination_url: destinationUrl.trim() || null, presencial_type: 'origen_destino' as PresencialType };
 
+    const parsedMaxTickets = parseInt(maxTicketsPerOrder);
+    const maxTicketsValue = Number.isNaN(parsedMaxTickets) ? undefined : parsedMaxTickets;
     const { data, error: dbError } = await supabase
       .from('events')
       .insert({
@@ -346,7 +348,7 @@ export default function NewEventPage() {
         capacity: totalCapacity,
         price_mxn: basePrice,
         status: 'draft',
-        max_tickets_per_order: maxTicketsPerOrder ? parseInt(maxTicketsPerOrder) : undefined,
+        max_tickets_per_order: maxTicketsValue,
       })
       .select()
       .single();

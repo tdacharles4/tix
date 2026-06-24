@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
     const cap = Math.min(session.max_quantity, event.max_tickets_per_order);
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > cap) {
       return NextResponse.json(
-        { error: `Cantidad invalida. Maxicmo ${cap} boletos.`},
+        { error: `Cantidad invalida. Maximo ${cap} boletos.`},
         { status: 400 },
       )
     }

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { it, expect, vi } from 'vitest';
 import { createServiceClient } from '@/lib/supabase/server';
 import { POST } from '@/app/api/checkout/route';
 import { fakeSupabase } from '@/tests/helpers/fakeSupabase';
@@ -122,3 +122,119 @@ it('precio de ticket toma precedencia sobre precio de evento', async () => {
         p_unit_price_override: 500,
     });
 });
+
+// Bug #9
+
+it('permite cantidad dentro del limite', async () => {
+    const fake = fakeSupabase({
+        from: {
+            checkout_sessions:  { data: sesionBase({ max_quantity: 10 }), error: null },
+            events:             { data: eventoBase({ max_tickets_per_order: 10 }), error: null },
+        },
+        rpc: { reserve_tickets: { data: 'orden-1', error: null } }
+    });
+    vi.mocked(createServiceClient).mockReturnValue(fake as any);
+
+    const res = await POST(new NextRequest('https://localhost/api/checkout', {
+        method: 'POST', body: JSON.stringify(requestBody({ quantity: 2 })),
+    }));
+
+    expect(res.status).toBe(200);
+    expect(fake.rpc).toHaveBeenCalled();
+});
+
+it('permite cantidad exacta al limite', async () => {
+    const fake = fakeSupabase({
+        from: {
+            checkout_sessions:      { data: sesionBase({ max_quantity: 5 }), error: null },
+            events:                 { data: eventoBase({ max_tickets_per_order: 10 }), error: null }
+        },
+        rpc: { reserve_tickets: { data: 'orden-1', error: null } }
+    });
+    vi.mocked(createServiceClient).mockReturnValue(fake as any);
+
+    const res = await POST(new NextRequest('https://localhost/api/checkout', {
+        method: 'POST',
+        body: JSON.stringify(requestBody({ quantity: 5 })),
+    }));
+
+    expect(res.status).toBe(200);
+});
+
+it('rechaza cantidad sobre el limite', async () => {
+    const fake = fakeSupabase({
+        from: {
+            checkout_sessions:      { data: sesionBase({ max_quantity: 5 }), error: null },
+            events:                 { data: eventoBase({ max_tickets_per_order: 10 }), error: null }
+        }
+    });
+    vi.mocked(createServiceClient).mockReturnValue(fake as any);
+
+    const res = await POST(new NextRequest('https://localhost/api/checkout', {
+        method: 'POST',
+        body: JSON.stringify(requestBody({ quantity: 6 })),
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe('Cantidad invalida. Maximo 5 boletos.');
+    expect(fake.rpc).not.toHaveBeenCalled();
+});
+
+it('rechaza cantidades 0 o negativas', async () => {
+    const fake = fakeSupabase({
+        from: {
+            checkout_sessions:      { data: sesionBase({ max_quantity: 5 }), error: null },
+            events:                 { data: eventoBase({ max_tickets_per_order: 10 }), error: null }
+        }
+    });
+    vi.mocked(createServiceClient).mockReturnValue(fake as any);
+
+    const res = await POST(new NextRequest('https://localhost/api/checkout', {
+        method: 'POST',
+        body: JSON.stringify(requestBody({ quantity: -1 }))
+    }));
+
+    expect(res.status).toBe(400);
+});
+
+it('rechaza numeros no integros (decimales)', async () => {
+    const fake = fakeSupabase({
+        from: {
+            checkout_sessions:      { data: sesionBase({ max_quantity: 5 }), error: null },
+            events:                 { data: eventoBase({ max_tickets_per_order: 10 }), error: null }
+        }
+    });
+    vi.mocked(createServiceClient).mockReturnValue(fake as any);
+
+    const res = await POST(new NextRequest('https://localhost/api/checkout', {
+        method: 'POST',
+        body: JSON.stringify(requestBody({ quantity: 2.5 }))
+    }));
+
+    expect(res.status).toBe(400);
+});
+
+// Models event.max_tickets_per_order = null, which collapses Math.min(cap, null) to 0 and
+// locks out checkout entirely. Confirmed via call-site audit (2026-06-24) that this is NOT
+// reachable in production: events.max_tickets_per_order is `not null default 4` in the live
+// schema, so no row can ever hold null here. Kept as a defense-in-depth regression guard in
+// case that constraint is ever loosened later — not an active bug.
+it.fails('max_tickets_per_order es null', async () => {
+    const fake = fakeSupabase({
+        from: {
+            checkout_sessions:      { data: sesionBase({ max_quantity: 5 }), error: null },
+            events:                 { data: eventoBase({ max_tickets_per_order: null }), error: null }
+        },
+        rpc: { reserve_tickets: { data: 'orden-1', error: null } }
+    });
+    vi.mocked(createServiceClient).mockReturnValue(fake as any);
+
+    const res = await POST(new NextRequest('https://localhost/api/checkout', {
+        method: 'POST',
+        body: JSON.stringify(requestBody({ quantity: 1 }))
+    }));
+
+    expect(res.status).toBe(200);
+});
+

@@ -1,6 +1,6 @@
 # Boleteo — Cowork Sync
 
-Last updated by: Mac (Cowork desktop session) — 2026-06-20
+Last updated by: Mac (Cowork desktop session) — 2026-06-23
 
 ---
 
@@ -48,17 +48,20 @@ Ticket sales platform (boletería) for the Mexican market.
 
 ## Bugs Documented (see teachings.txt for full detail)
 
-**Bug #8 — Wrong price at checkout**
+**Bug #8 — Wrong price at checkout** ✅ Fixed, tests written
 `ticket_type_configs` has its own `price_mxn`. Checkout always uses `events.price_mxn`.
 Fix: fetch price from ticket type config when session has `ticket_type_config_id`, pass it into the `reserve_tickets` RPC as an optional unit price override.
+Tests: `tests/unit/api/checkout/route.test.ts` (4 cases, traced and confirmed correct). One known fixture issue left as-is per direction: case 1's `events` mock reuses `sesionBase()` instead of `eventoBase()` — doesn't currently cause a false pass due to a `Math.min`/NaN quirk in the unrelated quantity-cap check, but is fragile.
 
 **Bug #9 — Buyer quantity not bounded (redesigned, folds in Task #5)**
 Two checkout flows: Flow 1 (organizer's own site picks quantity, redirects to us for payment only) and Flow 2 (no organizer site — our checkout page IS the quantity picker, bounded by a per-link max). The old fix ("always use session.quantity") only fit Flow 1 and would have broken Flow 2.
 New design: `checkout_sessions.quantity` → `max_quantity` (a ceiling, not a fixed value); `events` gains `max_tickets_per_order` (organizer-configurable per event, replaces any hardcoded constant). Buyer's submitted quantity is validated as `1 <= qty <= min(session.max_quantity, event.max_tickets_per_order)` instead of trusted or discarded.
 Building Flow 2 first since it's easiest to test in production. Flow 1 isn't built yet but the schema/RPC already accommodate it. Full detail in teachings.txt.
+Tests in progress: cases 1-6 (quantity cap, in `tests/unit/api/checkout/route.test.ts`) walked through and agreed on, not yet written to the file — includes a deliberate `it.fails(...)` case documenting the known null-cap lockout bug (`event.max_tickets_per_order` null → cap becomes 0 → every order rejected) so it stays visible until actually fixed. Cases 7-12 (`tests/unit/api/checkout/session/route.test.ts` — link generation + token validation) not started.
 
-**Bug #3 — Redemption race condition** ✅ Fixed
+**Bug #3 — Redemption race condition** ✅ Fixed, tests written
 Postgres RPC `redeem_ticket(p_ticket_id, p_event_id, p_scanned_by)` does `UPDATE tickets SET status='redeemed', redeemed_at=now(), redeemed_by=p_scanned_by WHERE id=p_ticket_id AND event_id=p_event_id AND status='active' RETURNING *` atomically — also closes a cross-event validation gap by scoping the update to `event_id`. 0 rows returned → `lib/qr/validate.ts` falls back to a read to classify the reason (`not_found` / `wrong_event` / `cancelled` / `transferred` / `already_redeemed`). Live in `lib/qr/validate.ts` + `app/api/tickets/[id]/validate/route.ts`. Dead duplicate `app/api/tickets/redeem/route.ts` removed.
+Tests: `tests/unit/lib/qr/validate.test.ts` (8 cases) + `tests/unit/api/tickets/validate-route.test.ts` (4 cases), both traced and confirmed correct.
 
 ---
 
@@ -78,4 +81,4 @@ Postgres RPC `redeem_ticket(p_ticket_id, p_event_id, p_scanned_by)` does `UPDATE
 
 ## Next Up
 
-Unit tests for Bugs #3, #8, #9 next (plan written to teachings.txt, not yet implemented — no test framework installed). Then #4 check-in sessions, #9 buyer quantity null-cap bug (`event.max_tickets_per_order` null locks out checkout — see teachings.txt), #10 phase validation, #7 Conekta live.
+Unit tests for Bug #3 and Bug #8 written and verified (see teachings.txt + tests/). Bug #9 tests in progress: file 1 (`tests/unit/api/checkout/route.test.ts`, cases 1-6, quantity cap) walked through, pending write + a local `npm test` run; file 2 (`tests/unit/api/checkout/session/route.test.ts`, cases 7-12, link generation + token validation) not started. Then #4 check-in sessions, the null-cap bug itself (`event.max_tickets_per_order` null locks out checkout — see teachings.txt Bug #9 case 6/10), #10 phase validation, #7 Conekta live.

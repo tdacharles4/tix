@@ -2,7 +2,7 @@ import { createServiceClient } from '@/lib/supabase/server';
 
 export type ValidationResult =
   | { valid: true; ticket: Record<string, unknown>; event: Record<string, unknown>; buyer: Record<string, unknown> }
-  | { valid: false; reason: 'already_redeemed' | 'cancelled' | 'transferred' | 'not_found' | 'wrong_event' };
+  | { valid: false; reason: 'redeemed' | 'cancelled' | 'transferred' | 'not_found' | 'wrong_event' };
 
 export async function validateAndRedeemTicket(
   ticketId: string,
@@ -39,6 +39,6 @@ export async function validateAndRedeemTicket(
   if (ticket.event_id !== eventId)      return { valid: false, reason: 'wrong_event' }
   if (ticket.status === 'cancelled')    return { valid: false, reason: 'cancelled' };
   if (ticket.status === 'transferred')  return { valid: false, reason: 'transferred' };
-  return { valid: false, reason: 'already_redeemed' };
+  return { valid: false, reason: 'redeemed' };
 
 }

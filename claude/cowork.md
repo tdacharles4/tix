@@ -1,6 +1,6 @@
 # Boleteo — Cowork Sync
 
-Last updated by: Mac (Cowork desktop session)
+Last updated by: Mac (Cowork desktop session) — 2026-06-20
 
 ---
 
@@ -35,7 +35,7 @@ Ticket sales platform (boletería) for the Mexican market.
 |---|---|---|
 | 1 | ✅ Done | Get current DB schema from Supabase |
 | 2 | ✅ Done | Fix middleware: profile.status check (column exists, was fine) |
-| 3 | 🔴 Pending | Fix atomic ticket redemption race condition |
+| 3 | ✅ Done | Fix atomic ticket redemption race condition |
 | 4 | 🔴 Pending | Build check-in session system (scanner auth) |
 | 5 | 🔴 Pending | Per-event configurable max tickets/order — folded into #9 redesign, see Architecture Decisions |
 | 6 | 🟡 Pending | Add inventory rollback on Conekta order creation failure |
@@ -57,9 +57,8 @@ Two checkout flows: Flow 1 (organizer's own site picks quantity, redirects to us
 New design: `checkout_sessions.quantity` → `max_quantity` (a ceiling, not a fixed value); `events` gains `max_tickets_per_order` (organizer-configurable per event, replaces any hardcoded constant). Buyer's submitted quantity is validated as `1 <= qty <= min(session.max_quantity, event.max_tickets_per_order)` instead of trusted or discarded.
 Building Flow 2 first since it's easiest to test in production. Flow 1 isn't built yet but the schema/RPC already accommodate it. Full detail in teachings.txt.
 
-**Bug #3 — Redemption race condition**
-Redeem endpoint does read → update in two DB round trips. Two simultaneous scans can both pass the active check.
-Fix: Postgres RPC that does `UPDATE ... WHERE status = 'active' RETURNING *` atomically. If 0 rows returned → already redeemed.
+**Bug #3 — Redemption race condition** ✅ Fixed
+Postgres RPC `redeem_ticket(p_ticket_id, p_event_id, p_scanned_by)` does `UPDATE tickets SET status='redeemed', redeemed_at=now(), redeemed_by=p_scanned_by WHERE id=p_ticket_id AND event_id=p_event_id AND status='active' RETURNING *` atomically — also closes a cross-event validation gap by scoping the update to `event_id`. 0 rows returned → `lib/qr/validate.ts` falls back to a read to classify the reason (`not_found` / `wrong_event` / `cancelled` / `transferred` / `already_redeemed`). Live in `lib/qr/validate.ts` + `app/api/tickets/[id]/validate/route.ts`. Dead duplicate `app/api/tickets/redeem/route.ts` removed.
 
 ---
 
@@ -73,9 +72,10 @@ Fix: Postgres RPC that does `UPDATE ... WHERE status = 'active' RETURNING *` ato
 - Two checkout flows going forward: Flow 1 = organizer's own website picks quantity and redirects to Boleteo for payment only (API/embedded, not built — groundwork only). Flow 2 = standalone shareable link (e.g. Instagram bio) where Boleteo's own checkout page is the quantity picker, bounded by an organizer-set per-link max. Flow 2 is the implementation priority since it's easiest to test in production.
 - Max-tickets-per-order is now `events.max_tickets_per_order`, organizer-configurable per event — replaces the earlier idea of a hardcoded platform-wide cap (was Task #5, now folded into Task #9's redesign). Enforced both at the API layer and defensively inside the `reserve_tickets` RPC.
 - SQL for `events.max_tickets_per_order`, the `checkout_sessions.quantity` → `max_quantity` rename, and the updated `reserve_tickets` RPC has been written (see teachings.txt Bug #9) but as of this update has not yet been run against the live DB — check before assuming the schema reflects it.
+- Dead code cleanup: ~12 unused files removed (orphaned components under `components/organizer`, `components/buyer`, `components/checkin`, `components/ui`, plus the duplicate `app/api/tickets/redeem/route.ts`). Confirmed zero importers before deletion; `tsc --noEmit` showed no new errors.
 
 ---
 
 ## Next Up
 
-Bugs first (#8, #9, #3), then new features (#4 check-in sessions, #5 max cap, #10 phase validation), then Conekta live (#7).
+Unit tests for Bugs #3, #8, #9 next (plan written to teachings.txt, not yet implemented — no test framework installed). Then #4 check-in sessions, #9 buyer quantity null-cap bug (`event.max_tickets_per_order` null locks out checkout — see teachings.txt), #10 phase validation, #7 Conekta live.

@@ -8,6 +8,7 @@ export async function lockInventory(
   buyerEmail: string,
   buyerName: string,
   unitPriceOverride?: number,
+  ticketTypeConfigId?: string | null,
 ): Promise<string> {
   const supabase = createServiceClient();
   const { data, error } = await supabase.rpc('reserve_tickets', {
@@ -18,6 +19,7 @@ export async function lockInventory(
     p_buyer_name:   buyerName,
     p_platform_fee: getPlatformFee(quantity),
     p_unit_price_override: unitPriceOverride ?? null,
+    p_ticket_type_config_id: ticketTypeConfigId ?? null,
   });
   if (error) throw new Error(error.message);
   return data as string;

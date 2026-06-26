@@ -1,57 +1,264 @@
-
-
 ────────────────────────────────────────────────────────────────────────────────
-8. TEST PLAN — BUG #8 (wrong price at checkout)
+10. IMPLEMENTATION PLAN — TASK #10 (ticket_phases validation at checkout)
 ────────────────────────────────────────────────────────────────────────────────
-tests/unit/api/checkout/route.test.ts (ticketTypeName / unitPriceOverride block):
-  1. session.ticket_type_config_id is null → unitPriceOverride stays
-     undefined, ticketTypeName stays 'General'.
-  2. session.ticket_type_config_id set, lookup succeeds → ticketTypeName =
-     tc.name, unitPriceOverride = tc.price_mxn (NOT events.price_mxn — this
-     is the exact bug being guarded against).
-  3. session.ticket_type_config_id set but lookup returns no row → falls
-     back to 'General' / undefined override, does not throw. Confirms this
-     fallback is intentional, not an accident.
+PROBLEM, STATED EXACTLY: checkout today enforces exactly two things, both
+inside reserve_tickets() in supabase/migrations/20260624192211_remote_schema.sql
+(lines 151-198): event.status = 'live', and quantity bounded by
+event.max_tickets_per_order + event.capacity. Nothing anywhere in the checkout
+path reads ticket_phases.end_date, ticket_phases.end_on_sold_out, or
+ticket_type_configs.quantity. The only place phase-status logic exists at all
+is computePhaseStatuses() in
+app/(organizer)/dashboard/events/[id]/EventTabs.tsx (lines 17-34) — client-
+side, display-only, never called from the checkout path. Net effect: a buyer
+can complete checkout against a ticket type whose phase has closed (by date
+or by stock), or oversell an individual type's quantity cap, as long as the
+event's aggregate capacity isn't exhausted.
 
-lib/inventory.ts — lockInventory (exercised via the same route test,
-asserting against the fake's recorded rpc call args):
-  4. Assert supabase.rpc('reserve_tickets', {...}) is called with
-     p_unit_price_override equal to whatever was passed in (or null when
-     undefined) — never silently substituting events.price_mxn.
+The plan below is split into phases that follow the actual request flow
+through the system, not just file-edit order.
 
-────────────────────────────────────────────────────────────────────────────────
-9. TEST PLAN — BUG #9 (buyer quantity bounded)
-────────────────────────────────────────────────────────────────────────────────
-tests/unit/api/checkout/route.test.ts (cap = Math.min(session.max_quantity,
-event.max_tickets_per_order)):
-  1. quantity within cap → passes, proceeds to lockInventory.
-  2. quantity exactly at cap → passes (boundary).
-  3. quantity above cap → 400, Spanish error message.
-  4. quantity = 0 or negative → 400.
-  5. non-integer quantity (e.g. 2.5) → 400.
-  6. KNOWN OPEN BUG — event.max_tickets_per_order is null (organizer left
-     the field blank when creating the event): Math.min(session.max_quantity,
-     null) coerces to 0, so cap = 0 and every quantity >= 1 is rejected,
-     locking out checkout entirely. This test is EXPECTED TO FAIL until the
-     null-cap lockout is actually fixed (e.g. defaulting the column in the
-     DB, or guarding the Math.min call in code). Write it now as a
-     known-red test so the fix can be verified against it later — do not
-     silently skip it.
 
-tests/unit/api/checkout/session/route.test.ts (POST — link generation):
-  7. quantity <= event.max_tickets_per_order → session created, max_quantity
-     stored correctly.
-  8. quantity > event.max_tickets_per_order → 400 at link-generation time.
-  9. event.status !== 'live' → 404 'Event not available'.
-  10. SAME OPEN BUG, inverted effect: event.max_tickets_per_order is null →
-      Number(quantity) > null coerces null to 0, so ANY quantity >= 1 is
-      rejected at link-generation (organizer can't even generate a working
-      checkout link for that event). Also expected to fail until fixed —
-      pin down both manifestations of the same root cause.
+PHASE 1 — SCHEMA (foundation; nothing else works without this)
+────────────────────────────────────────────────────────────────
+Two columns, given as a direct SQL block for the Supabase SQL editor — not a
+migration file, per standing rule:
 
-tests/unit/api/checkout/session/route.test.ts (GET — token validation):
-  11. token not found / already used / expired → correct valid:false +
-      reason string for each case.
-  12. valid session → returns { valid: true, max_quantity, ticketTypeConfigId }.
+  alter table public.tickets
+    add column ticket_type_config_id uuid references public.ticket_type_configs(id);
+
+  create index if not exists tickets_ticket_type_config_id_idx
+    on public.tickets (ticket_type_config_id);
+
+  alter table public.ticket_type_configs
+    add column tickets_sold integer not null default 0;
+
+tickets.ticket_type_config_id replaces the fragile name-match that
+computePhaseStatuses already relies on (tickets.ticket_type is a denormalized
+text column, matched by NAME against ticket_type_configs.name — two phases
+reusing a type name, e.g. both having a "General" tier, would get their counts
+merged). This FK is for correct lookups/reporting; it is NOT what makes the
+cap enforcement safe under concurrency.
+
+ticket_type_configs.tickets_sold is what makes it safe. CRITICAL CATCH: ticket
+rows are not inserted inside reserve_tickets() — that function only inserts
+the orders row. Ticket rows get created afterward, in a separate step, in
+app/api/checkout/route.ts (lines 70-83), AFTER lockInventory() has already
+returned and committed. So counting `select count(*) from tickets where
+ticket_type_config_id = ...` inside reserve_tickets() would NOT be race-safe —
+two concurrent buyers could each see "0 sold so far" inside their own
+transaction and both pass, the same failure class as Bug #3, reintroduced at
+the type level. The existing fix for this exact problem at the event level is
+events.tickets_sold: a live counter incremented atomically under the row lock,
+not a derived count. ticket_type_configs.tickets_sold plays the identical
+role, one level down.
+
+
+PHASE 2 — DATABASE LOGIC (the core: where validation actually happens)
+────────────────────────────────────────────────────────────────
+Replace reserve_tickets() — again, a direct SQL block to paste into the
+Supabase SQL editor:
+
+  create or replace function public.reserve_tickets(
+    p_event_id uuid,
+    p_quantity integer,
+    p_buyer_email text,
+    p_buyer_name text,
+    p_platform_fee numeric,
+    p_buyer_id uuid default null::uuid,
+    p_unit_price_override numeric default null::numeric,
+    p_ticket_type_config_id uuid default null::uuid
+  ) returns uuid
+  language plpgsql
+  security definer
+  as $function$
+  declare
+    v_event  public.events;
+    v_config public.ticket_type_configs;
+    v_phase  public.ticket_phases;
+    v_order_id uuid;
+    v_price numeric;
+    v_phase_total_qty  integer;
+    v_phase_total_sold integer;
+  begin
+    select * into v_event from public.events where id = p_event_id for update;
+    if not found then raise exception 'Event not found'; end if;
+    if v_event.status <> 'live' then raise exception 'Event is not available for purchase'; end if;
+    if p_quantity > v_event.max_tickets_per_order then
+      raise exception 'Exceeds maximum tickets per order (%) for this event', v_event.max_tickets_per_order;
+    end if;
+    if (v_event.capacity - v_event.tickets_sold) < p_quantity then
+      raise exception 'Not enough tickets available';
+    end if;
+
+    if p_ticket_type_config_id is not null then
+      select * into v_config from public.ticket_type_configs
+        where id = p_ticket_type_config_id for update;
+      if not found or v_config.event_id <> p_event_id then
+        raise exception 'Invalid ticket type for this event';
+      end if;
+      if v_config.tickets_sold + p_quantity > v_config.quantity then
+        raise exception 'Not enough tickets available for this ticket type';
+      end if;
+
+      select * into v_phase from public.ticket_phases
+        where id = v_config.phase_id for update;
+      if not found then raise exception 'Invalid ticket phase'; end if;
+      if v_phase.end_date is not null and current_date > v_phase.end_date then
+        raise exception 'This phase has closed';
+      end if;
+
+      if v_phase.end_on_sold_out then
+        select coalesce(sum(quantity), 0), coalesce(sum(tickets_sold), 0)
+          into v_phase_total_qty, v_phase_total_sold
+          from public.ticket_type_configs where phase_id = v_phase.id;
+        if v_phase_total_sold + p_quantity > v_phase_total_qty then
+          raise exception 'This phase is sold out';
+        end if;
+      end if;
+
+      update public.ticket_type_configs
+        set tickets_sold = tickets_sold + p_quantity
+        where id = p_ticket_type_config_id;
+    end if;
+
+    v_price := coalesce(p_unit_price_override, v_event.price_mxn) * p_quantity;
+    update public.events set tickets_sold = tickets_sold + p_quantity where id = p_event_id;
+
+    insert into public.orders (
+      buyer_id, event_id, quantity, amount_mxn, platform_fee_mxn, status, buyer_email, buyer_name
+    ) values (
+      p_buyer_id, p_event_id, p_quantity, v_price, p_platform_fee, 'pending', p_buyer_email, p_buyer_name
+    ) returning id into v_order_id;
+
+    return v_order_id;
+  end;
+  $function$;
+
+Design notes:
+  - p_ticket_type_config_id defaults to null and the entire block is skipped
+    when it is null — so events with no phases configured at all (or the
+    embedded "Flow 1" widget, still groundwork-only per cowork.md) behave
+    exactly as they do today. No regression for the simple case.
+  - Locks are taken in a fixed order every call: event -> config -> phase.
+    Same fixed order, every time, every call site (there is only one call
+    site) — that's what avoids deadlocks between concurrent reservations.
+  - Three checks, each independent: (a) the specific type's own cap, read
+    from v_config.tickets_sold, not a row count; (b) the phase's end_date,
+    a hard cutoff regardless of remaining stock; (c) the phase's aggregate
+    end_on_sold_out check, which sums tickets_sold across ALL configs in the
+    phase, not just the one being purchased — this means a type with stock
+    remaining can still get rejected if the phase as a whole has sold
+    through its combined allocation. That's the definition you gave: a
+    phase closes when its end_date arrives OR when all types in it are
+    collectively sold out — not when any single type sells out.
+  - The tickets_sold increment happens inside the same transaction, under
+    the same lock already held on v_config, so it's atomic with the check
+    that gated it. No window for a second concurrent call to slip through.
+
+
+PHASE 3 — APPLICATION LAYER (the request path: buyer's purchase)
+────────────────────────────────────────────────────────────────
+lib/inventory.ts — lockInventory() needs a new parameter threaded into the
+rpc call:
+
+  export async function lockInventory(
+    eventId: string,
+    quantity: number,
+    buyerId: string | null,
+    buyerEmail: string,
+    buyerName: string,
+    unitPriceOverride?: number,
+    ticketTypeConfigId?: string | null,
+  ): Promise<string> {
+    const supabase = createServiceClient();
+    const { data, error } = await supabase.rpc('reserve_tickets', {
+      p_event_id:     eventId,
+      p_quantity:     quantity,
+      p_buyer_id:     buyerId,
+      p_buyer_email:  buyerEmail,
+      p_buyer_name:   buyerName,
+      p_platform_fee: getPlatformFee(quantity),
+      p_unit_price_override: unitPriceOverride ?? null,
+      p_ticket_type_config_id: ticketTypeConfigId ?? null,
+    });
+    if (error) throw new Error(error.message);
+    return data as string;
+  }
+
+app/api/checkout/route.ts — two edits. First, pass the id through at the
+lockInventory call site (line 65):
+
+  const orderId = await lockInventory(
+    eventId, quantity, null, buyerEmail, buyerName,
+    unitPriceOverride, session.ticket_type_config_id,
+  );
+
+Second, stamp the new FK onto every ticket row created (lines 72-81):
+
+  const ticketInserts = Array.from({ length: quantity }, (_, i) => ({
+    id:    randomUUID(),
+    order_id: orderId,
+    event_id:    eventId,
+    buyer_id:    null,
+    buyer_email: buyerEmail,
+    holder_name: names[i]?.trim() || buyerName,
+    ticket_type: ticketTypeName,
+    ticket_type_config_id: session.ticket_type_config_id,
+    status:      'active' as const,
+  }));
+
+app/api/checkout/session/route.ts (link generation) is intentionally NOT
+touched. The authoritative check happens downstream, at redemption time in
+reserve_tickets() — a session token created while a phase is still open but
+redeemed after it closes (or sells out) will correctly be rejected at that
+point. Skipping a duplicate check at link-generation time isn't a
+correctness gap, just a missed opportunity for an earlier, friendlier error
+message to the organizer. Worth adding later as UX polish, not required for
+this task.
+
+
+PHASE 4 — VERIFICATION
+────────────────────────────────────────────────────────────────
+fakeSupabase-style unit tests (tests/unit/api/checkout/route.test.ts) can
+only verify that the route threads ticketTypeConfigId through correctly —
+they mock .rpc() entirely, so they never exercise the actual phase/cap logic,
+which now lives in SQL. Real coverage requires an integration test against
+local Postgres (supabase start), same harness as the Bug #3 concurrency test.
+Cases that test needs:
+  1. Type at its cap (tickets_sold = quantity) → next reservation rejected,
+     even though the event and phase both still have room.
+  2. Phase past end_date → rejected even with stock remaining in the type.
+  3. Phase has end_on_sold_out = true, two types in it: type A still has
+     stock, type B is exhausted, but the SUM across both has been reached →
+     a purchase of type A is rejected, proving the phase-level aggregate
+     check fires independently of the individual type's own remaining
+     stock.
+  4. Event with no phases/configs at all (ticketTypeConfigId = null end to
+     end) → entirely unaffected, same behavior as before this change.
+  5. Concurrency: two buyers race for the last unit of a 1-quantity type via
+     Promise.all firing two reserve_tickets calls with no await between
+     them → exactly one commits, the other gets 'Not enough tickets
+     available for this ticket type'. Mirrors the Bug #3 test design
+     exactly (fire both, assert exactly one winner by checking returned
+     data, not just truthiness).
+
+
+PHASE 5 — OUT OF SCOPE / KNOWN GAPS (deliberately not fixed here)
+────────────────────────────────────────────────────────────────
+  - Historical backfill: tickets sold before this change has
+    ticket_type_config_id = null forever. The only link available for old
+    rows is name-matching (ticket_type text vs ticket_type_configs.name),
+    which is exactly the unreliable join this change moves away from — not
+    safe to auto-backfill blindly if any event ever reused a type name
+    across phases. Flagged, not fixed.
+  - release_inventory (the decrement counterpart to tickets_sold) is defined
+    in SQL but confirmed via grep to never be called anywhere in the app
+    today — pre-existing dead code, not introduced by this change. This
+    plan does not wire a decrement path for ticket_type_configs.tickets_sold
+    either, since there's currently nothing calling the event-level version
+    to mirror.
+  - The embedded checkout widget ("Flow 1" in cowork.md, groundwork only)
+    doesn't pass a ticketTypeConfigId at all yet. Once it's built out, it
+    needs to follow the same threading shown in Phase 3.
 
 ================================================================================

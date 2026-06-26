@@ -62,7 +62,15 @@ export async function POST(req: NextRequest) {
     }
 
     // Reserve inventory atomically via DB function (creates order + updates capacity)
-    const orderId = await lockInventory(eventId, quantity, null, buyerEmail, buyerName, unitPriceOverride);
+    const orderId = await lockInventory(
+      eventId, 
+      quantity, 
+      null, 
+      buyerEmail, 
+      buyerName, 
+      unitPriceOverride,
+      session.ticket_type_config_id,
+    );
 
     // Mark session token as used
     await supabase.from('checkout_sessions').update({ used: true }).eq('id', sessionToken);
@@ -77,6 +85,7 @@ export async function POST(req: NextRequest) {
       buyer_email: buyerEmail,
       holder_name: names[i]?.trim() || buyerName,
       ticket_type: ticketTypeName,
+      ticket_type_config_id: session.ticket_type_config_id,
       status:      'active' as const,
     }));
 

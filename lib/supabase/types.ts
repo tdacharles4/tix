@@ -77,6 +77,7 @@ export type Order = {
 
 export type Ticket = {
   id: string;
+  ticket_type_config_id: string | null;
   order_id: string;
   event_id: string;
   buyer_id: string|null;
@@ -128,6 +129,7 @@ export type CheckoutSession = {
 
 export type TicketInsert = {
   id?: string,
+  ticket_type_config_id: string | null;
   order_id: string;
   event_id: string;
   buyer_id: string|null;
@@ -199,12 +201,14 @@ export type Database = {
     Functions: {
       reserve_tickets: {
         Args: {
+          p_ticket_type_config_id: string;
           p_event_id: string;
           p_quantity: number;
           p_buyer_id: string|null;
           p_buyer_email: string;
           p_buyer_name: string;
           p_platform_fee: number;
+          p_unit_price_override: number;
         };
         Returns: string;
       };

@@ -42,7 +42,7 @@ Ticket sales platform (boletería) for the Mexican market.
 | 7 | ⏳ Blocked | Wire up Conekta payment integration (blocked on 3,4,5,6) |
 | 8 | ✅ Done | Fix checkout: use ticket_type_configs.price_mxn not events.price_mxn (per teachings.txt, marked done on Mac) |
 | 9 | ✅ Done | Bound buyer quantity by session.max_quantity + event.max_tickets_per_order. Flow 2 (standalone link) first, Flow 1 (API/embedded) is groundwork only. Tests written (14 cases across 2 files). One known edge case open — see Bug #9 note below |
-| 10 | 🟡 Pending | Implement ticket_phases validation at checkout |
+| 10 | ✅ Done | Implement ticket_phases validation at checkout |
 
 ---
 
@@ -59,6 +59,13 @@ New design: `checkout_sessions.quantity` → `max_quantity` (a ceiling, not a fi
 Building Flow 2 first since it's easiest to test in production. Flow 1 isn't built yet but the schema/RPC already accommodate it. Full detail in teachings.txt.
 Tests: `tests/unit/api/checkout/route.test.ts` (6 cases, quantity cap) + `tests/unit/api/checkout/session/route.test.ts` (8 cases, link generation + token validation) — 14 cases total, traced and confirmed correct, `npm test` green. Each file has a deliberate `it.fails(...)` case documenting the known null-cap lockout bug (`event.max_tickets_per_order` null → `Math.min`/`>` coercion → cap effectively 0 → every order rejected), kept visible until resolved.
 Open question on that bug: the live schema (pulled 2026-06-24) defines `events.max_tickets_per_order` as `integer not null default 4` — the column can't actually hold null in the database today, existing or new rows. Needs confirming whether this edge case is reachable at all before spending time on a code fix.
+
+**Task #10 — Ticket phase validation at checkout** ✅ Done, tests written
+Schema: `tickets.ticket_type_config_id uuid FK` → `ticket_type_configs(id)` (replaces fragile name-match); `ticket_type_configs.tickets_sold integer not null default 0` (live counter, same pattern as `events.tickets_sold` — counting ticket rows is not safe since they're inserted after the RPC commits).
+RPC: `reserve_tickets` updated with `p_ticket_type_config_id uuid default null`. When non-null: locks config row (`FOR UPDATE`), checks type cap via counter, locks phase row, checks `end_date`, checks `end_on_sold_out` aggregate across all configs in phase, increments `ticket_type_configs.tickets_sold`. Null path skips all of this — events without phases unaffected.
+Application: `lib/inventory.ts` threads `ticketTypeConfigId` through to RPC. `app/api/checkout/route.ts` passes it to `lockInventory` and stamps it on each ticket insert row.
+Types: `Ticket`, `TicketInsert`, and `Functions.reserve_tickets.Args` updated in `lib/supabase/types.ts` to include `ticket_type_config_id?: string | null` and the two new optional RPC params.
+Tests: `tests/unit/api/checkout/route.test.ts` (3 new cases — threading verification, null bypass, error propagation) + `tests/integration/ticket-phase-validation.test.ts` (8 cases: null bypass, type cap, valid purchase + counter increment, end_date, end_on_sold_out, concurrency race + DB state). 40 total tests, 38 pass, 2 expected fail. `npm test` green.
 
 **Bug #3 — Redemption race condition** ✅ Fixed, tests written (unit + integration)
 Postgres RPC `redeem_ticket(p_ticket_id, p_event_id, p_scanned_by)` does `UPDATE tickets SET status='redeemed', redeemed_at=now(), redeemed_by=p_scanned_by WHERE id=p_ticket_id AND event_id=p_event_id AND status='active' RETURNING *` atomically — also closes a cross-event validation gap by scoping the update to `event_id`. 0 rows returned → `lib/qr/validate.ts` falls back to a read to classify the reason (`not_found` / `wrong_event` / `cancelled` / `transferred` / `already_redeemed`). Live in `lib/qr/validate.ts` + `app/api/tickets/[id]/validate/route.ts`. Dead duplicate `app/api/tickets/redeem/route.ts` removed.
@@ -83,4 +90,4 @@ Integration test: `tests/integration/redeem-ticket-concurrency.test.ts` — fire
 
 ## Next Up
 
-All unit tests (Bug #3, #8, #9) and the Bug #3 concurrency integration test written, verified, and green (`npm test` passes in full). Next: confirm whether the null-cap bug (Bug #9's `it.fails` case) is actually reachable given `events.max_tickets_per_order` is `not null default 4` in the live schema — if reachable, fix it; if not, downgrade the test from `it.fails` to reflect why it's a non-issue. After that: #4 check-in sessions, #10 phase validation, #7 Conekta live (deferred).
+All unit + integration tests green (40 total, 2 expected fail). Tasks #3, #8, #9, #10 done. Next: #4 check-in sessions (design scoped — stateless tokens, check_in_sessions table, organizer generates per-event link, scanner page reads token from URL instead of cookie session). After that: #6 inventory rollback, #7 Conekta (deferred).

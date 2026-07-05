@@ -5,7 +5,8 @@ import { createServiceClient } from '@/lib/supabase/server';
 import { generateQRCode } from '@/lib/qr/generate';
 import { resend } from '@/lib/resend/client';
 import { TicketEmail } from '@/lib/resend/templates/ticket-email';
-import * as React from 'react';
+import { createElement } from 'react';
+import { render } from '@react-email/render';
 
 export async function POST(req: NextRequest){
     const rawBody = await req.text();
@@ -113,16 +114,23 @@ async function handlePaymentSucceeded(
 
     for (const ticket of tickets) {
         const qrBase64 = await generateQRCode(ticket.id);
+        const qrData = qrBase64.replace(/^data:image\/png;base64,/,'');
         await resend.emails.send({
-            from:   'onboarding@resend.dev',
-            to:     order.buyer_email,
-            subject:    `Tu boleto para ${eventData.title}`,
-            react: React.createElement(TicketEmail, {
-                event:          eventData,
+            from:    'onboarding@resend.dev',
+            to:      order.buyer_email,
+            subject: `Tu boleto para ${eventData.title}`,
+            html: await render(createElement(TicketEmail, {
+                event:        eventData,
                 ticket,
-                buyerName:      order.buyer_name,
-                qrCodeBase64:   qrBase64,
-            }),
+                buyerName:    order.buyer_name,
+                qrCodeBase64: `cid:qr-${ticket.id}`,
+            })),
+            attachments: [{
+                filename:    `qr-${ticket.id}.png`,
+                content:     qrData,
+                contentType: 'image/png',
+                contentId:   `qr-${ticket.id}`,
+            }],
         });
 
         await supabase

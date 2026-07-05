@@ -22,7 +22,10 @@ export default function ConfirmationPage() {
   const [emailError, setEmailError] = useState('');
 
   useEffect(() => {
-    async function load() {
+    let attempts = 0;
+    const MAX = 10;
+
+    async function poll() {
       const res = await fetch(`/api/orders/${orderId}`);
       if (!res.ok) { setNotFound(true); setFetching(false); return; }
       const data = await res.json();
@@ -30,8 +33,15 @@ export default function ConfirmationPage() {
       setEvent(data.event);
       setTickets(data.tickets);
       setFetching(false);
+
+      // Keep polling until paid or we've tried MAX times (~20s)
+      if (data.order?.status !== 'paid' && attempts < MAX) {
+        attempts++;
+        setTimeout(poll, 2000);
+      }
     }
-    load();
+
+    poll();
   }, [orderId]);
 
   function handleEmailVerify(e: React.FormEvent) {

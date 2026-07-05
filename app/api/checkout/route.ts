@@ -5,8 +5,6 @@ import { lockInventory } from '@/lib/inventory';
 import { calculateStripeFees } from '@/lib/stripe/fees';
 import { stripe } from '@/lib/stripe/client';
 
-// import { createConektaOrder } from '@/lib/conekta/client'; // TODO: enable when Conekta is configured
-
 export async function POST(req: NextRequest) {
   try {
     const {
@@ -67,7 +65,7 @@ export async function POST(req: NextRequest) {
     const unitPrice   = unitPriceOverride ?? event.price_mxn;
     const platformFee = getPlatformFee(unitPrice, quantity);
 
-    // Reserve inventory atomically via DB function (creates order + updates capacity)
+    // Reserve inventory atomically via DB function
     const orderId = await lockInventory(
       eventId,
       quantity,

@@ -4,7 +4,8 @@ export type Profile = {
   full_name: string | null;
   role: 'organizer' | 'buyer';
   status: 'pending' | 'approved';
-  conekta_customer_id: string | null;
+  stripe_account_id: string | null;
+  stripe_onboarding_complete: boolean;
   created_at: string;
 };
 
@@ -68,7 +69,8 @@ export type Order = {
   quantity: number;
   amount_mxn: number;
   platform_fee_mxn: number;
-  conekta_order_id: string | null;
+  total_mxn: number | null;
+  stripe_payment_intent_id: string | null;
   status: 'pending' | 'paid' | 'refunded' | 'failed';
   buyer_email: string;
   buyer_name: string;
@@ -168,7 +170,7 @@ export type Database = {
       };
       orders: {
         Row: Order;
-        Insert: Omit<Order, 'id' | 'created_at'> & { conekta_order_id?: string | null };
+        Insert: Omit<Order, 'id' | 'created_at'> & { stripe_payment_intent_id?: string | null };
         Update: Partial<Order>;
         Relationships: [];
       };

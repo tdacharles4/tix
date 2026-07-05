@@ -40,6 +40,9 @@ export default async function DashboardPage() {
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-2xl font-bold text-gray-900">Mis eventos</h1>
         <div className="flex items-center gap-4">
+          <Link href="/dashboard/earnings" className="text-sm text-gray-500 hover:text-gray-900">
+            Mis ingresos
+          </Link>
           <LogoutButton />
           <Link
             href="/dashboard/events/new"

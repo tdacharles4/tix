@@ -78,7 +78,7 @@ export default function ConfirmationPage() {
         {event?.venue && <p className="text-sm text-gray-600 mb-3">{event.venue}</p>}
         <div className="flex justify-between text-sm border-t border-gray-100 pt-3">
           <span className="text-gray-600">{order?.quantity} boleto{(order?.quantity ?? 0) > 1 ? 's' : ''}</span>
-          <span className="font-semibold">{formatMXN(order?.amount_mxn ?? 0)}</span>
+          <span className="font-semibold">{formatMXN(order?.total_mxn ?? order?.amount_mxn ?? 0)}</span>
         </div>
       </div>
 

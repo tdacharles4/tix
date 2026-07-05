@@ -1,45 +1,954 @@
-PHASE 4 — VERIFICATION
+TASK #11 — STRIPE INTEGRATION PLAN
+================================================================================
+Last updated: 2026-07-03
+Scope: Replace Conekta with Stripe. Covers server-side integration (PaymentIntents,
+Stripe Connect Express), webhook fulfillment, organizer onboarding, in-site earnings
+dashboard, and frontend checkout form.
+
+WHY STRIPE CONNECT EXPRESS (not plain Stripe, not Stripe Custom)
 ────────────────────────────────────────────────────────────────
-fakeSupabase-style unit tests (tests/unit/api/checkout/route.test.ts) can
-only verify that the route threads ticketTypeConfigId through correctly —
-they mock .rpc() entirely, so they never exercise the actual phase/cap logic,
-which now lives in SQL. Real coverage requires an integration test against
-local Postgres (supabase start), same harness as the Bug #3 concurrency test.
-Cases that test needs:
-  1. Type at its cap (tickets_sold = quantity) → next reservation rejected,
-     even though the event and phase both still have room.
-  2. Phase past end_date → rejected even with stock remaining in the type.
-  3. Phase has end_on_sold_out = true, two types in it: type A still has
-     stock, type B is exhausted, but the SUM across both has been reached →
-     a purchase of type A is rejected, proving the phase-level aggregate
-     check fires independently of the individual type's own remaining
-     stock.
-  4. Event with no phases/configs at all (ticketTypeConfigId = null end to
-     end) → entirely unaffected, same behavior as before this change.
-  5. Concurrency: two buyers race for the last unit of a 1-quantity type via
-     Promise.all firing two reserve_tickets calls with no await between
-     them → exactly one commits, the other gets 'Not enough tickets
-     available for this ticket type'. Mirrors the Bug #3 test design
-     exactly (fire both, assert exactly one winner by checking returned
-     data, not just truthiness).
+Three account types exist in Stripe Connect:
+
+  Standard   — Organizer creates their own full Stripe account independently and
+               connects it to Boleteo via OAuth. They own their Stripe relationship.
+               Least control for Boleteo; most friction for organizers.
+
+  Express    — Boleteo creates the account programmatically and sends organizer
+               through Stripe's hosted KYC/onboarding page. Organizer gets a
+               limited Stripe dashboard (payouts, balance). Boleteo controls the
+               experience; Stripe handles compliance. THIS IS THE RIGHT CHOICE.
+
+  Custom     — Boleteo owns everything, organizer has no Stripe presence at all.
+               Boleteo is responsible for KYC, fraud monitoring, disputes, and
+               compliance. Enormous legal and operational burden.
+
+Without Connect at all (Option B — Boleteo collects then pays out):
+  Boleteo holds third-party funds and disburses to organizers. In Mexico this
+  makes you a payment facilitator requiring CNBV registration (SOFOM/SOFIPO).
+  That is a financial license, not a startup decision. Do not do this.
+
+With Express: Stripe is the money transmitter. Each organizer is a Stripe account
+holder. Stripe handles their KYC, AML, and CLABE verification. Boleteo is legally
+a platform, not a financial institution.
 
 
-PHASE 5 — OUT OF SCOPE / KNOWN GAPS (deliberately not fixed here)
+MONEY FLOW
 ────────────────────────────────────────────────────────────────
-  - Historical backfill: tickets sold before this change has
-    ticket_type_config_id = null forever. The only link available for old
-    rows is name-matching (ticket_type text vs ticket_type_configs.name),
-    which is exactly the unreliable join this change moves away from — not
-    safe to auto-backfill blindly if any event ever reused a type name
-    across phases. Flagged, not fixed.
-  - release_inventory (the decrement counterpart to tickets_sold) is defined
-    in SQL but confirmed via grep to never be called anywhere in the app
-    today — pre-existing dead code, not introduced by this change. This
-    plan does not wire a decrement path for ticket_type_configs.tickets_sold
-    either, since there's currently nothing calling the event-level version
-    to mirror.
-  - The embedded checkout widget ("Flow 1" in cowork.md, groundwork only)
-    doesn't pass a ticketTypeConfigId at all yet. Once it's built out, it
-    needs to follow the same threading shown in Phase 3.
+For one ticket at 200 MXN:
+
+  Buyer pays:          231.33 MXN  (gross, computed via formula below)
+  Stripe deducts:    –  11.33 MXN  (3.6% of 231.33 + 3 MXN)
+  Net after Stripe:    220.00 MXN
+
+  application_fee:   –  20.00 MXN  → Boleteo's Stripe balance
+  To organizer:        200.00 MXN  → organizer's Connected Account → CLABE
+
+Stripe's processing fee is NOT declared in the PaymentIntent. You only set `amount`
+(what the buyer pays) and `application_fee_amount` (Boleteo's cut). Stripe deducts
+their own fee from the gross automatically at settlement time (typically T+2 in MX).
+
+NOTE ON getPlatformFee(quantity):
+  lib/utils.ts line 9: `return Number(process.env.NEXT_PUBLIC_PLATFORM_FEE_MXN ?? 20) * quantity`
+  This is a FLAT fee per ticket (default 20 MXN), NOT a percentage.
+  On a 200 MXN ticket it happens to be 10%, but on a 500 MXN ticket it's 4%.
+  This discrepancy is flagged but not changed in this task — keep using the function
+  as-is and decide the correct fee structure separately.
+
+
+FEE FORMULA
+────────────────────────────────────────────────────────────────
+We want the organizer + Boleteo to net the subtotal EXACTLY after Stripe takes their
+cut. Stripe's fee on the gross = gross * 0.036 + 3. So:
+
+  gross - (gross * 0.036 + 3) = subtotal
+  gross * 0.964 - 3            = subtotal
+  gross * 0.964                = subtotal + 3
+  gross                        = (subtotal + 3) / 0.964
+
+Working in centavos from the start to avoid floating-point errors:
+
+  totalCentavos = Math.ceil((subtotalCentavos + 300) / (1 - 0.036))
+
+Math.ceil rounds up so the buyer absorbs any fractional-centavo rounding. The
+organizer + platform net subtotalCentavos or subtotalCentavos + 1 (rounding favor).
+Never round down — that puts the rounding loss on Boleteo's margin.
+
+Put this in lib/stripe/fees.ts (pure math, no SDK — safe to import client-side
+for displaying the fee breakdown before the buyer confirms payment):
+
+  // lib/stripe/fees.ts
+  const STRIPE_RATE = 0.036;
+  const STRIPE_FIXED_CENTAVOS = 300; // 3 MXN
+
+  /**
+   * Given a subtotal in centavos (ticket price + platform fee),
+   * returns the total the buyer should be charged and the Stripe fee breakdown,
+   * both in centavos.
+   *
+   * Formula: gross = (subtotal + fixed) / (1 - rate)
+   * This ensures: gross - stripe_fee = subtotal exactly.
+   */
+  export function calculateStripeFees(subtotalCentavos: number): {
+    totalCentavos: number;
+    stripeFeeCentavos: number;
+  } {
+    const totalCentavos = Math.ceil(
+      (subtotalCentavos + STRIPE_FIXED_CENTAVOS) / (1 - STRIPE_RATE)
+    );
+    return {
+      totalCentavos,
+      stripeFeeCentavos: totalCentavos - subtotalCentavos,
+    };
+  }
+
+Why a separate file (not inlined in checkout/route.ts)?
+  The checkout PAGE needs to display the fee breakdown to the buyer BEFORE they
+  enter payment details. That means the formula runs client-side for display, then
+  again server-side when creating the PaymentIntent. A shared pure-math file avoids
+  duplicating the formula and guarantees both sides agree.
+
 
 ================================================================================
+PHASE 1 — SCHEMA
+================================================================================
+Run both blocks in the Supabase SQL editor (local Studio at 127.0.0.1:54323 AND
+remote dashboard) — same two-instance rule as every prior schema change.
+
+Block 1: orders table — replace Conekta reference with Stripe
+
+  ALTER TABLE orders
+    RENAME COLUMN conekta_order_id TO stripe_payment_intent_id;
+
+Why RENAME instead of DROP + ADD?
+  RENAME preserves the column in place — same position, same nullability, same
+  default, same any index that might exist. DROP + ADD would lose all that and
+  force a full table rewrite on large tables (not a concern now, but good habit).
+
+Block 2: profiles table — organizer's Stripe Connect account
+
+  ALTER TABLE profiles
+    ADD COLUMN stripe_account_id text,
+    ADD COLUMN stripe_onboarding_complete boolean NOT NULL DEFAULT false;
+
+stripe_account_id: Stripe's `acct_XXXX` identifier. Stored so Boleteo can make
+  API calls on the organizer's behalf without re-fetching from Stripe each time.
+
+stripe_onboarding_complete: Cached boolean. Stripe's `charges_enabled` is the
+  authoritative source, but checking it on every page load adds a Stripe API
+  round-trip. We cache the result locally. The cache is refreshed when:
+    a) Organizer returns from the onboarding flow (GET /api/stripe/connect/return)
+    b) The `account.updated` webhook fires with charges_enabled: true
+
+  An account can have stripe_account_id set but stripe_onboarding_complete = false
+  if the organizer started but didn't finish onboarding. That's intentional — we
+  hold the account ID so we don't create duplicates, and we can resume onboarding.
+
+
+================================================================================
+PHASE 2 — PACKAGES + ENV VARS
+================================================================================
+Install:
+  npm install stripe @stripe/stripe-js @stripe/react-stripe-js
+
+  stripe                — Stripe Node.js SDK. Server-side only.
+  @stripe/stripe-js     — Stripe.js browser library. Loads Stripe's script from
+                          Stripe's CDN (required for PCI compliance — Stripe's
+                          tokenization must run on their own CDN, not your bundle).
+  @stripe/react-stripe-js — React wrappers (Elements, PaymentElement, etc.)
+
+Env vars to add to .env.local:
+  STRIPE_SECRET_KEY=sk_test_...
+    Found in: Stripe Dashboard → Developers → API keys
+    Server-only. NEVER prefix with NEXT_PUBLIC_. Never log it.
+
+  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_...
+    Found in: same place. Safe to expose to browser (that's its purpose).
+    The publishable key only allows creating payment tokens — it cannot charge
+    or read account data. Stripe's security model is built around this split.
+
+  STRIPE_WEBHOOK_SECRET=whsec_...
+    Generated by the Stripe CLI when you run `stripe listen` (local dev) or
+    by Stripe Dashboard → Webhooks → Add endpoint (production).
+    Used to verify webhook signatures. See Phase 10 for CLI setup.
+
+
+================================================================================
+PHASE 3 — lib/stripe/client.ts
+================================================================================
+Delete lib/conekta/client.ts and lib/conekta/webhook.ts. Create this instead.
+
+  // lib/stripe/client.ts
+  import Stripe from 'stripe';
+
+  if (!process.env.STRIPE_SECRET_KEY) {
+    throw new Error('STRIPE_SECRET_KEY is not set');
+  }
+
+  export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+    apiVersion: '2025-06-30.basil',
+  });
+
+Why throw at module load time instead of relying on TypeScript's `!` assertion?
+  If the env var is missing, you want a clear error ("STRIPE_SECRET_KEY is not set")
+  at startup — not a mysterious "Cannot read properties of undefined" when the first
+  Stripe call fires at runtime. This pattern surfaces config problems immediately.
+
+Why pin apiVersion?
+  Stripe releases breaking API changes under new version strings. Without pinning,
+  the SDK picks up the latest version, and a future Stripe release could silently
+  break response shapes your code depends on. The pinned version here matches the
+  latest at the time this was written — update it intentionally, not accidentally.
+
+Why not use the Stripe constructor with `typescript: true`?
+  That option was removed in stripe@13+. The package ships its own TypeScript
+  types by default now. No extra config needed.
+
+No webhook.ts needed alongside client.ts — unlike Conekta's manual HMAC-SHA256
+verification, Stripe's verification is a single SDK call:
+  `stripe.webhooks.constructEvent(rawBody, sig, secret)`
+That call lives directly in the webhook route handler (see Phase 6).
+
+
+================================================================================
+PHASE 4 — ORGANIZER CONNECT ONBOARDING
+================================================================================
+Two new API endpoints + one dashboard guard.
+
+────────────────────────────────
+4a. POST /api/stripe/connect
+────────────────────────────────
+Called when the organizer clicks "Connect bank account" in the dashboard.
+Creates a Stripe Express account (if none exists) and returns a one-time
+hosted onboarding URL.
+
+  // app/api/stripe/connect/route.ts
+  import { NextRequest, NextResponse } from 'next/server';
+  import { createServiceClient } from '@/lib/supabase/server';
+  import { stripe } from '@/lib/stripe/client';
+
+  export async function POST(req: NextRequest) {
+    const supabase = createServiceClient();
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('stripe_account_id, stripe_onboarding_complete')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile) return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
+
+    // If already complete, no need to re-onboard
+    if (profile.stripe_onboarding_complete) {
+      return NextResponse.json({ alreadyConnected: true });
+    }
+
+    let accountId = profile.stripe_account_id;
+
+    // Create Express account if this organizer has never started onboarding
+    if (!accountId) {
+      const account = await stripe.accounts.create({
+        type: 'express',
+        country: 'MX',
+        email: user.email!,
+        capabilities: {
+          card_payments: { requested: true },
+          transfers: { requested: true },
+        },
+      });
+      accountId = account.id;
+
+      await supabase
+        .from('profiles')
+        .update({ stripe_account_id: accountId })
+        .eq('id', user.id);
+    }
+
+    // AccountLinks are single-use and expire — always generate a fresh one
+    const accountLink = await stripe.accountLinks.create({
+      account: accountId,
+      return_url:  `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/stripe/return`,
+      refresh_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/stripe/refresh`,
+      type: 'account_onboarding',
+    });
+
+    return NextResponse.json({ url: accountLink.url });
+  }
+
+Why `capabilities: { card_payments, transfers }`?
+  In Mexico with Express accounts, you must explicitly request capabilities.
+  `card_payments` allows the account to receive funds from card charges.
+  `transfers` allows Stripe to route funds to them via `transfer_data` in a
+  PaymentIntent. Without both, the PaymentIntent creation will fail.
+
+Why check `stripe_onboarding_complete` before creating an account?
+  Idempotency. If the organizer hits this endpoint again (e.g., clicks the button
+  twice), we don't create duplicate Stripe accounts. The account ID gate
+  (`if (!accountId)`) handles the "started but not finished" case.
+
+Why always generate a fresh AccountLink?
+  AccountLinks are single-use and expire after a short window (~5 minutes). You
+  cannot reuse them. Always generate at the moment the user is about to be
+  redirected.
+
+What is refresh_url?
+  If the AccountLink expires before the organizer finishes (they left the tab open
+  for too long, or hit back), Stripe redirects them to refresh_url. Your page at
+  that URL should call POST /api/stripe/connect again to get a fresh link and
+  redirect immediately.
+
+────────────────────────────────
+4b. GET /api/stripe/connect/return
+────────────────────────────────
+Called when Stripe redirects the organizer back after onboarding.
+Checks whether onboarding is actually complete and caches the result.
+
+  // app/api/stripe/connect/return/route.ts
+  import { NextRequest, NextResponse } from 'next/server';
+  import { createServiceClient } from '@/lib/supabase/server';
+  import { stripe } from '@/lib/stripe/client';
+
+  export async function GET(req: NextRequest) {
+    const supabase = createServiceClient();
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.redirect(new URL('/auth/login', req.url));
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('stripe_account_id')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile?.stripe_account_id) {
+      return NextResponse.redirect(new URL('/dashboard', req.url));
+    }
+
+    const account = await stripe.accounts.retrieve(profile.stripe_account_id);
+
+    if (account.charges_enabled && account.payouts_enabled) {
+      await supabase
+        .from('profiles')
+        .update({ stripe_onboarding_complete: true })
+        .eq('id', user.id);
+
+      return NextResponse.redirect(
+        new URL('/dashboard?stripe=connected', req.url)
+      );
+    }
+
+    // Onboarding started but not finished (missing documents, CLABE not verified, etc.)
+    return NextResponse.redirect(
+      new URL('/dashboard?stripe=incomplete', req.url)
+    );
+  }
+
+Why check both charges_enabled AND payouts_enabled?
+  charges_enabled = Stripe can accept payments destined for this account.
+  payouts_enabled = Stripe can pay out to their linked bank account (CLABE).
+  An account can have charges_enabled: true but payouts_enabled: false if their
+  CLABE hasn't been verified yet. Both must be true before going live.
+
+Why not use a webhook for this check?
+  Stripe fires `account.updated` when onboarding status changes, which is more
+  reliable than the return URL (the user might close the tab before returning).
+  Add an `account.updated` handler in the webhook route later as a belt-and-
+  suspenders approach, but the return URL check handles the happy path UX.
+
+────────────────────────────────
+4c. Dashboard publish guard
+────────────────────────────────
+Before an organizer can set an event status to 'live', check that their Stripe
+account is connected IF the event has a price. Free events skip Stripe entirely.
+
+This guard belongs in whatever endpoint handles event publishing
+(e.g., a PATCH /api/events/[id] or the event status update flow):
+
+  // Inside the event publish handler, before setting status: 'live'
+  if (event.price_mxn > 0) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('stripe_onboarding_complete')
+      .eq('id', event.organizer_id)
+      .single();
+
+    if (!profile?.stripe_onboarding_complete) {
+      return NextResponse.json(
+        { error: 'Complete Stripe onboarding before publishing paid events' },
+        { status: 403 }
+      );
+    }
+  }
+
+Why only for price_mxn > 0?
+  Free events never touch Stripe — no PaymentIntent is created, no Connect needed.
+  A free event can go live without any Stripe setup.
+
+
+================================================================================
+PHASE 5 — app/api/checkout/route.ts (UPDATED)
+================================================================================
+Current behavior:
+  lockInventory → create tickets (active) → mark order paid → return { orderId }
+
+New behavior:
+  lockInventory → create PaymentIntent → store stripe_payment_intent_id on order
+  → return { clientSecret, orderId, fees }
+
+What is removed:
+  Lines 79–92 (ticket insert block) — moves to webhook handler
+  Lines 95–105 (Conekta stub comment + immediate paid status) — replaced entirely
+
+What is added after lockInventory():
+
+  // Fetch organizer's Stripe account for transfer_data
+  const { data: organizer } = await supabase
+    .from('profiles')
+    .select('stripe_account_id')
+    .eq('id', event.organizer_id)
+    .single();
+
+  if (!organizer?.stripe_account_id) {
+    // Caught by the publish guard, but defensive fallback
+    return NextResponse.json(
+      { error: 'Organizer payment account not configured' },
+      { status: 503 }
+    );
+  }
+
+  const platformFee   = getPlatformFee(quantity);         // Boleteo's cut (MXN)
+  const ticketSubtotal = unitPrice * quantity;             // unitPrice = unitPriceOverride ?? event.price_mxn
+  const subtotalCentavos = Math.round((ticketSubtotal + platformFee) * 100);
+
+  const { totalCentavos, stripeFeeCentavos } = calculateStripeFees(subtotalCentavos);
+
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount: totalCentavos,                               // centavos, integer — what buyer pays
+    currency: 'mxn',
+    application_fee_amount: Math.round(platformFee * 100), // Boleteo's cut in centavos
+    transfer_data: {
+      destination: organizer.stripe_account_id,          // acct_XXXX — organizer's Express account
+    },
+    metadata: {
+      order_id:              orderId,
+      ticket_type_config_id: session.ticket_type_config_id ?? '',
+      holder_names:          JSON.stringify(names),      // names already computed above
+      ticket_type_name:      ticketTypeName,             // ticketTypeName already computed above
+    },
+  });
+
+  // Store the PaymentIntent ID on the order so the webhook can look it up
+  await supabase
+    .from('orders')
+    .update({ stripe_payment_intent_id: paymentIntent.id })
+    .eq('id', orderId);
+
+  return NextResponse.json({
+    clientSecret: paymentIntent.client_secret,
+    orderId,
+    fees: {
+      ticketSubtotalMxn: ticketSubtotal,
+      platformFeeMxn:    platformFee,
+      stripeFeeMxn:      stripeFeeCentavos / 100,
+      totalMxn:          totalCentavos / 100,
+    },
+  });
+
+Why Math.round for subtotalCentavos (not Math.ceil)?
+  We're converting an already-computed MXN value to centavos. A ticket at 200 MXN
+  is exactly 20000 centavos — no rounding loss. Math.round handles any floating-
+  point imprecision (e.g., 0.1 + 0.2 = 0.30000000000000004). Math.ceil here would
+  silently overcharge by 1 centavo if there's float noise.
+
+Why Math.round for application_fee_amount (not Math.ceil)?
+  Same reason. Platform fee is already an integer MXN value (getPlatformFee returns
+  a whole number). Math.round is safe and more correct than ceiling.
+
+Why pass fees back in the response?
+  The checkout page needs to show the buyer a fee breakdown (ticket subtotal +
+  platform fee + Stripe processing fee + total) before they enter payment details.
+  Returning the authoritative server-side calculation avoids any client/server
+  discrepancy in what's displayed vs what's charged.
+
+Why store metadata on the PaymentIntent instead of adding columns to orders?
+  The webhook handler needs ticket_type_config_id and holder_names to create ticket
+  rows. These are available at checkout time but not stored on the orders table.
+  Options:
+    a) Add columns to orders (extra schema work, data that belongs to checkout context)
+    b) Store in PaymentIntent metadata (free, no schema change, available in webhook)
+  Option b is clean for data that's only needed during fulfillment. Stripe
+  metadata values are capped at 500 chars each — holder_names as a JSON array of
+  10 names at 50 chars each fits comfortably.
+
+Why look up the organizer separately instead of joining in the events query?
+  The events table doesn't store organizer payment info — that's on profiles. A
+  JOIN would work but keeping the queries separate makes each one's intent clearer.
+
+NOTE: `unitPrice` for the fee calculation:
+  unitPrice is defined earlier in the route as:
+    let unitPriceOverride: number | undefined;
+    // ... if session.ticket_type_config_id, set unitPriceOverride = tc.price_mxn
+  Then passed to lockInventory. For the Stripe amount:
+    const unitPrice = unitPriceOverride ?? event.price_mxn;
+  Add this line before the fee calculation block.
+
+
+================================================================================
+PHASE 6 — app/api/webhooks/stripe/route.ts (NEW FILE)
+================================================================================
+Delete app/api/webhooks/conekta/route.ts. Create this instead.
+
+  import { NextRequest, NextResponse } from 'next/server';
+  import Stripe from 'stripe';
+  import { stripe } from '@/lib/stripe/client';
+  import { createServiceClient } from '@/lib/supabase/server';
+  import { generateQRCode } from '@/lib/qr/generate';
+  import { resend } from '@/lib/resend/client';
+  import { TicketEmail } from '@/lib/resend/templates/ticket-email';
+  import * as React from 'react';
+
+  export async function POST(req: NextRequest) {
+    const rawBody = await req.text();
+    const sig = req.headers.get('stripe-signature');
+
+    if (!sig) {
+      return NextResponse.json({ error: 'Missing Stripe-Signature header' }, { status: 400 });
+    }
+
+    let event: Stripe.Event;
+    try {
+      event = stripe.webhooks.constructEvent(
+        rawBody,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET!
+      );
+    } catch (err) {
+      console.error('Webhook signature verification failed:', err);
+      return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
+    }
+
+    const supabase = createServiceClient();
+
+    switch (event.type) {
+      case 'payment_intent.succeeded': {
+        const pi = event.data.object as Stripe.PaymentIntent;
+        await handlePaymentSucceeded(pi, supabase);
+        break;
+      }
+      case 'payment_intent.payment_failed': {
+        const pi = event.data.object as Stripe.PaymentIntent;
+        await handlePaymentFailed(pi, supabase);
+        break;
+      }
+      // All other event types: acknowledge and ignore.
+      // Stripe retries webhooks that return non-2xx — always return 200 for events
+      // you don't handle, or Stripe will keep retrying indefinitely.
+    }
+
+    return NextResponse.json({ received: true });
+  }
+
+Why req.text() and not req.json()?
+  stripe.webhooks.constructEvent() verifies a signature over the raw request bytes.
+  If you parse JSON first (req.json()), Node re-serializes the object, which can
+  subtly change whitespace or key ordering — breaking the signature check. Always
+  read raw bytes, then parse manually if needed. Next.js App Router does NOT
+  auto-parse the body, so req.text() gives you the raw string Stripe signed.
+
+Why a switch instead of if/else?
+  Scalability. Adding a new event type is one new `case` block. TypeScript can also
+  narrow `event.data.object` properly within each case when using the Stripe types.
+
+────────────────────────────────
+handlePaymentSucceeded
+────────────────────────────────
+
+  async function handlePaymentSucceeded(
+    pi: Stripe.PaymentIntent,
+    supabase: ReturnType<typeof createServiceClient>
+  ) {
+    const { order_id, ticket_type_config_id, holder_names, ticket_type_name } = pi.metadata;
+
+    const { data: order, error: orderError } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', order_id)
+      .single();
+
+    if (orderError || !order) {
+      // Log but do NOT throw. Throwing causes the route to return 500,
+      // which makes Stripe retry. If the order is genuinely missing,
+      // retrying won't help and just creates noise. Return 200 + log.
+      console.error('Order not found for payment_intent:', pi.id, 'order_id:', order_id);
+      return;
+    }
+
+    // Idempotency guard — Stripe can fire the same event more than once
+    // (network issues, Stripe's own delivery guarantees). Skip if already processed.
+    if (order.status === 'paid') return;
+
+    const { data: eventData } = await supabase
+      .from('events')
+      .select('*')
+      .eq('id', order.event_id)
+      .single();
+
+    if (!eventData) {
+      console.error('Event not found for order:', order.id);
+      return;
+    }
+
+    // 1. Mark order paid
+    const { error: updateErr } = await supabase
+      .from('orders')
+      .update({ status: 'paid' })
+      .eq('id', order.id);
+
+    if (updateErr) {
+      console.error('Failed to update order status:', updateErr);
+      return;
+    }
+
+    // 2. Create ticket rows (fixed version: no qr_code, correct fields)
+    const names: string[] = (() => {
+      try { return JSON.parse(holder_names || '[]'); }
+      catch { return []; }
+    })();
+
+    const ticketInserts = Array.from({ length: order.quantity }, (_, i) => ({
+      order_id:              order.id,
+      event_id:              order.event_id,
+      buyer_id:              null,
+      buyer_email:           order.buyer_email,
+      holder_name:           names[i]?.trim() || order.buyer_name,
+      ticket_type:           ticket_type_name || 'General',
+      ticket_type_config_id: ticket_type_config_id || null,
+      status:                'active' as const,
+    }));
+
+    const { data: tickets, error: ticketError } = await supabase
+      .from('tickets')
+      .insert(ticketInserts)
+      .select();
+
+    if (ticketError || !tickets) {
+      console.error('Ticket insert failed:', ticketError);
+      return;
+    }
+
+    // 3. Send ticket emails
+    for (const ticket of tickets) {
+      const qrBase64 = await generateQRCode(ticket.id);
+
+      await resend.emails.send({
+        from:    'boletos@boletera.mx',
+        to:      order.buyer_email,
+        subject: `Tu boleto para ${eventData.title}`,
+        react:   React.createElement(TicketEmail, {
+          event:        eventData,
+          ticket,
+          buyerName:    order.buyer_name,
+          qrCodeBase64: qrBase64,
+        }),
+      });
+
+      await supabase
+        .from('tickets')
+        .update({ email_sent_at: new Date().toISOString() })
+        .eq('id', ticket.id);
+    }
+  }
+
+Why try/catch around JSON.parse(holder_names)?
+  metadata values are strings. If something corrupted the JSON (truncation, bad
+  encoding), a thrown SyntaxError would abort ticket creation for all buyers.
+  Fallback to [] means all holders get buyer_name — worse UX, but tickets still
+  get created and emails still go out.
+
+Why buyer_id: null?
+  The current schema/RPC creates orders with buyer_id null (guest checkout). Once
+  buyer accounts exist, thread order.buyer_id here instead.
+
+────────────────────────────────
+handlePaymentFailed
+────────────────────────────────
+
+  async function handlePaymentFailed(
+    pi: Stripe.PaymentIntent,
+    supabase: ReturnType<typeof createServiceClient>
+  ) {
+    const { order_id } = pi.metadata;
+    if (!order_id) return;
+
+    const { data: order } = await supabase
+      .from('orders')
+      .select('event_id, quantity, status')
+      .eq('id', order_id)
+      .single();
+
+    // Only roll back if still pending — idempotency guard
+    if (!order || order.status !== 'pending') return;
+
+    // Roll back inventory (Task #6 — this is where release_inventory finally gets called)
+    await supabase.rpc('release_inventory', {
+      p_event_id: order.event_id,
+      p_quantity:  order.quantity,
+    });
+
+    await supabase
+      .from('orders')
+      .update({ status: 'failed' })
+      .eq('id', order_id);
+  }
+
+This completes Task #6 (inventory rollback) as a side effect of Task #11.
+release_inventory was already defined in SQL but never called in app code.
+A failed payment is the correct trigger for rolling back reserved inventory.
+
+NOTE: release_inventory only decrements events.tickets_sold. If the order had a
+ticket_type_config_id, ticket_type_configs.tickets_sold also needs decrementing.
+The current release_inventory SQL may not handle that — verify before shipping.
+
+
+================================================================================
+PHASE 7 — lib/supabase/types.ts (UPDATES)
+================================================================================
+Four changes needed:
+
+1. Profile type (line 6): add two new fields
+   stripe_account_id: string | null;
+   stripe_onboarding_complete: boolean;
+
+2. Order type (line 71): rename the column reference
+   conekta_order_id: string | null;
+   → stripe_payment_intent_id: string | null;
+
+3. orders table Insert (line 171): rename the optional intersection field
+   & { conekta_order_id?: string | null }
+   → & { stripe_payment_intent_id?: string | null }
+
+4. profiles table Insert/Update (lines 152-153): add the new profile fields
+   to the Update partial so you can update them:
+     stripe_account_id?: string | null;
+     stripe_onboarding_complete?: boolean;
+
+profiles.conekta_customer_id stays in the type for now — the column exists on
+the remote DB. Remove it in a future cleanup pass (column rename + type update).
+
+
+================================================================================
+PHASE 8 — FRONTEND CHECKOUT PAGE
+================================================================================
+The checkout page (read it before modifying — location TBD) currently submits to
+POST /api/checkout and receives { orderId }, then redirects to a success page.
+
+New flow:
+  1. Page calls POST /api/checkout → receives { clientSecret, orderId, fees }
+  2. Display fee breakdown to buyer (ticketSubtotal + platformFee + stripeFee = total)
+  3. Render Stripe Elements payment form using clientSecret
+  4. Buyer fills in card details + clicks Pay
+  5. stripe.confirmPayment() handles payment on Stripe's side
+  6. On success: redirect to /orders/[orderId]/confirmation
+
+Setup at the page/layout level:
+  import { loadStripe } from '@stripe/stripe-js';
+  import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
+
+  // Outside the component — only create this once, not on every render
+  const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
+
+  // After POST /api/checkout returns clientSecret:
+  <Elements stripe={stripePromise} options={{ clientSecret }}>
+    <CheckoutForm orderId={orderId} />
+  </Elements>
+
+Inside CheckoutForm:
+  const stripe = useStripe();
+  const elements = useElements();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stripe || !elements) return;
+
+    const { error } = await stripe.confirmPayment({
+      elements,
+      confirmParams: {
+        return_url: `${window.location.origin}/orders/${orderId}/confirmation`,
+      },
+    });
+
+    // confirmPayment redirects on success — this line only runs on error
+    if (error) setErrorMessage(error.message ?? 'Payment failed');
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <PaymentElement />
+      <button type="submit" disabled={!stripe}>Pagar</button>
+      {errorMessage && <p>{errorMessage}</p>}
+    </form>
+  );
+
+Why loadStripe outside the component?
+  loadStripe fetches Stripe.js from Stripe's CDN. If called inside the component,
+  it re-fetches on every render. The stripePromise reference stays stable across
+  renders when created at module level.
+
+Why PaymentElement over CardElement?
+  PaymentElement is Stripe's newer component that adapts to the customer's location
+  and shows all available payment methods (card, OXXO, SPEI, etc.) automatically.
+  CardElement only shows a card form. In Mexico, OXXO and SPEI are important payment
+  methods — PaymentElement surfaces them without any extra configuration.
+
+Why does confirmPayment redirect on success?
+  Stripe redirects the browser to return_url after successful payment confirmation.
+  The `error` block only runs when payment fails synchronously (invalid card, etc.).
+  This is Stripe's standard flow for PaymentElement.
+
+The /orders/[orderId]/confirmation page:
+  Does NOT need to verify payment status — that's the webhook's job. The page
+  can just show "Payment received — your tickets will be emailed to you shortly."
+  Optionally: poll order.status or use Supabase Realtime to flip UI when webhook
+  marks the order paid and tickets are created.
+
+
+================================================================================
+PHASE 9 — IN-SITE EARNINGS DASHBOARD
+================================================================================
+Instead of redirecting organizers to Stripe's Express dashboard, fetch earnings
+data from Stripe's API on their behalf using `{ stripeAccount: acct_XXXX }`.
+
+  // In an organizer dashboard server component or API route:
+  const [balance, transactions, payouts] = await Promise.all([
+    stripe.balance.retrieve({}, { stripeAccount: profile.stripe_account_id }),
+    stripe.balanceTransactions.list(
+      { limit: 50, type: 'payment', expand: ['data.source'] },
+      { stripeAccount: profile.stripe_account_id }
+    ),
+    stripe.payouts.list(
+      { limit: 20 },
+      { stripeAccount: profile.stripe_account_id }
+    ),
+  ]);
+
+What each call returns:
+  balance: { available: [{ amount, currency }], pending: [{ amount, currency }] }
+    available = funds that can be paid out now
+    pending   = funds still in the settlement window (T+2 in MX)
+
+  balanceTransactions: each entry represents a settled charge. Useful fields:
+    amount, fee, net, created, description, source.payment_intent (if expanded)
+
+  payouts: each entry represents a transfer to the organizer's CLABE. Useful fields:
+    amount, arrival_date, status ('paid', 'in_transit', 'pending', 'failed')
+
+What you CANNOT do in-site (must still redirect to Stripe Express):
+  - Organizer changes their CLABE / bank account
+  - Organizer views tax documents (annual 1099 equivalent)
+  - Organizer initiates a manual payout
+  - Organizer disputes a chargeback
+
+For those, generate a login link to the Stripe Express dashboard:
+  const loginLink = await stripe.accounts.createLoginLink(profile.stripe_account_id);
+  // Redirect to loginLink.url — it's a one-time, short-lived link
+
+Keep a "Go to Stripe dashboard" button for account management.
+Build the read-only earnings view (balance, recent transactions, payout history)
+in-site using the API calls above.
+
+
+================================================================================
+PHASE 10 — LOCAL TESTING WITH STRIPE CLI
+================================================================================
+Install Stripe CLI (one-time):
+  brew install stripe/stripe-cli/stripe
+
+Authenticate (one-time):
+  stripe login
+  # Opens browser, authenticate with your Stripe account
+
+Forward webhooks to local server:
+  stripe listen --forward-to localhost:3000/api/webhooks/stripe
+  # Prints: "Your webhook signing secret is whsec_..."
+  # Copy that value into .env.local as STRIPE_WEBHOOK_SECRET
+
+Test cards (in Stripe sandbox):
+  4242 4242 4242 4242  — Always succeeds. Any future expiry. Any CVC.
+  4000 0000 0000 9995  — Insufficient funds (triggers payment_failed)
+  4000 0025 0000 3155  — Requires 3D Secure authentication
+  4000 0000 0000 0002  — Generic decline
+
+Trigger test events manually (useful for testing the webhook without going through
+the full checkout UI):
+  stripe trigger payment_intent.succeeded
+  stripe trigger payment_intent.payment_failed
+
+Note: `stripe trigger` fires events with synthetic data that won't have your
+metadata (order_id, etc.). The webhook handler's null checks and logs will fire.
+For a real end-to-end test, go through the actual checkout flow with a test card.
+
+Connect account testing:
+  In Stripe sandbox, when an organizer goes through Express onboarding, they'll
+  see test mode onboarding screens. Use test data for SSN (000-00-0000 in US),
+  CLABE, etc. Stripe provides test routing numbers for sandbox accounts.
+
+
+================================================================================
+CLEANUP
+================================================================================
+After the Stripe integration is verified end-to-end:
+
+Delete:
+  lib/conekta/client.ts
+  lib/conekta/webhook.ts
+  app/api/webhooks/conekta/route.ts
+
+Leave for a future cleanup pass:
+  profiles.conekta_customer_id column + type reference — dropping a column is
+  destructive and not urgent since it's null everywhere. Schedule it alongside
+  any other schema cleanup.
+
+  events.conekta_product_id column + type reference — same reason.
+
+
+================================================================================
+KNOWN GAPS (out of scope for Task #11)
+================================================================================
+1. release_inventory and ticket_type_configs.tickets_sold:
+   handlePaymentFailed calls release_inventory, which decrements events.tickets_sold.
+   But if the order had a ticket_type_config_id, ticket_type_configs.tickets_sold
+   was also incremented by reserve_tickets. The current release_inventory SQL needs
+   to be verified/updated to also decrement ticket_type_configs.tickets_sold.
+   Check the SQL function before shipping.
+
+2. Webhook retries and partial failure:
+   If ticket insert succeeds but email sending fails, the webhook returns 200 and
+   Stripe won't retry. The tickets exist but no email was sent. Consider wrapping
+   the email loop in a try/catch that logs failures separately rather than silently
+   dropping them. A retry queue (or just a cron job that finds tickets with
+   email_sent_at = null) is the robust fix.
+
+3. 3D Secure / authentication flows:
+   PaymentElement handles 3D Secure automatically on the client side. No extra
+   server-side work needed. But test it with card 4000 0025 0000 3155 to confirm
+   the return_url flow works correctly after the authentication redirect.
+
+4. Chargebacks and refunds:
+   When a buyer disputes a charge, Stripe fires `charge.dispute.created`. When a
+   refund is issued, `charge.refunded` fires. Neither is handled in this plan.
+   For now, manage disputes and refunds directly in the Stripe dashboard. Add
+   webhook handlers when the volume justifies it.
+
+5. Free events:
+   Events with price_mxn = 0 should bypass Stripe entirely — create tickets
+   directly without a PaymentIntent. The current checkout/route.ts doesn't have
+   this branch. Add it: if totalCentavos === 0, skip PaymentIntent creation,
+   create tickets directly, mark order paid, return { orderId }.
+
+6. Historical orders (pre-Stripe):
+   Existing orders have conekta_order_id values (or nulls). After the column
+   rename to stripe_payment_intent_id, those historical orders will have null in
+   the new column — correct, since they were never processed through Stripe.
+   No data migration needed.

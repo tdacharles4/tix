@@ -1,5 +1,4 @@
 import { createServiceClient } from '@/lib/supabase/server';
-import { getPlatformFee } from '@/lib/utils';
 
 export async function lockInventory(
   eventId: string,
@@ -9,6 +8,7 @@ export async function lockInventory(
   buyerName: string,
   unitPriceOverride?: number,
   ticketTypeConfigId?: string | null,
+  platformFee: number = 0,
 ): Promise<string> {
   const supabase = createServiceClient();
   const { data, error } = await supabase.rpc('reserve_tickets', {
@@ -17,7 +17,7 @@ export async function lockInventory(
     p_buyer_id:     buyerId,
     p_buyer_email:  buyerEmail,
     p_buyer_name:   buyerName,
-    p_platform_fee: getPlatformFee(quantity),
+    p_platform_fee: platformFee,
     p_unit_price_override: unitPriceOverride ?? null,
     p_ticket_type_config_id: ticketTypeConfigId ?? null,
   });

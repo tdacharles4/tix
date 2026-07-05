@@ -4,9 +4,12 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import type { Event } from '@/lib/supabase/types';
-import { formatMXN } from '@/lib/utils';
+import { formatMXN, getPlatformFee } from '@/lib/utils';
+import { calculateStripeFees } from '@/lib/stripe/fees';
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 
-const PLATFORM_FEE = Number(process.env.NEXT_PUBLIC_PLATFORM_FEE_MXN ?? 20);
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
 
 export default function CheckoutPage() {
   const { eventId }  = useParams<{ eventId: string }>();
@@ -25,6 +28,14 @@ export default function CheckoutPage() {
   const [holderNames, setHolderNames] = useState<string[]>(['']);
   const [loading,     setLoading]     = useState(false);
   const [error,       setError]       = useState(paymentError ? 'El pago fue rechazado. Intenta de nuevo.' : '');
+  const [clientSecret,     setClientSecret]     = useState<string | null>(null);
+  const [checkoutOrderId,  setCheckoutOrderId]  = useState<string | null>(null);
+  const [checkoutFees, setCheckoutFees] = useState<{
+    ticketSubtotalMxn: number;
+    platformFeeMxn: number;
+    stripeFeeMxn: number;
+    totalMxn: number;
+  } | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -74,9 +85,14 @@ export default function CheckoutPage() {
     setHolderNames((prev) => { const next = [...prev]; next[i] = value; return next; });
   }
 
-  const subtotal = (event?.price_mxn ?? 0) * quantity;
-  const fee      = PLATFORM_FEE * quantity;
-  const total    = subtotal + fee;
+  const subtotal  = (event?.price_mxn ?? 0) * quantity;
+  const fee       = getPlatformFee(event?.price_mxn ?? 0, quantity);
+  const { chargeCentavos, stripeFeeCentavos } = calculateStripeFees(
+    Math.round(subtotal * 100),
+    Math.round(fee * 100),
+  );
+  const stripeFee = stripeFeeCentavos / 100;
+  const total     = chargeCentavos / 100;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -102,15 +118,49 @@ export default function CheckoutPage() {
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? 'Error al procesar el pago'); setLoading(false); return; }
 
-      if (data.checkoutUrl) {
-        window.location.href = data.checkoutUrl;
-      } else {
-        router.push(`/confirmation/${data.orderId}`);
-      }
+      setClientSecret(data.clientSecret);
+      setCheckoutOrderId(data.orderId);
+      setCheckoutFees(data.fees ?? null);
+      setLoading(false);
     } catch {
       setError('Error de conexión. Intenta de nuevo.');
       setLoading(false);
     }
+  }
+
+  function CheckoutForm({ orderId }: { orderId: string }) {
+    const stripe   = useStripe();
+    const elements = useElements();
+    const [paying,   setPaying]   = useState(false);
+    const [payError, setPayError] = useState('');
+
+    async function handlePay(e: React.FormEvent) {
+      e.preventDefault();
+      if (!stripe || !elements) return;
+      setPaying(true);
+      const { error } = await stripe.confirmPayment({
+        elements,
+        confirmParams: {
+          return_url: `${window.location.origin}/confirmation/${orderId}`,
+        },
+      });
+      // confirmPayment redirects on success — this only runs on error
+      if (error) {
+        setPayError(error.message ?? 'El pago fue rechazado. Intenta de nuevo.');
+        setPaying(false);
+      }
+    }
+
+    return (
+      <form onSubmit={handlePay} className="space-y-5">
+        <PaymentElement />
+        {payError && <p className="text-red-600 text-sm">{payError}</p>}
+        <button type="submit" disabled={!stripe || paying}
+          className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50">
+          {paying ? 'Procesando…' : 'Confirmar pago'}
+        </button>
+      </form>
+    );
   }
 
   if (tokenValid === null) return <div className="p-8 text-gray-500">Verificando enlace…</div>;
@@ -131,6 +181,71 @@ export default function CheckoutPage() {
 
   if (!event) return <div className="p-8 text-gray-500">Cargando evento…</div>;
 
+  if (clientSecret && checkoutOrderId) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-10">
+        <h1 className="text-2xl font-bold text-gray-900 mb-1">Pago</h1>
+        <p className="text-gray-500 text-sm mb-6">{event.title}</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          {/* Left — order summary */}
+          <div className="space-y-4">
+            <div className="border border-gray-200 rounded-lg p-4 text-sm">
+              <h3 className="font-semibold text-gray-900 mb-3">Resumen</h3>
+              <div className="flex justify-between mb-2 text-gray-600">
+                <span>Precio × {quantity}</span>
+                <span>{formatMXN(checkoutFees?.ticketSubtotalMxn ?? subtotal)}</span>
+              </div>
+              <div className="flex justify-between mb-2 text-gray-500">
+                <span>Cargo por servicio</span>
+                <span>{formatMXN(checkoutFees?.platformFeeMxn ?? fee)}</span>
+              </div>
+              <div className="flex justify-between mb-2 text-gray-500">
+                <span>Cargo por transacción</span>
+                <span>{formatMXN(checkoutFees?.stripeFeeMxn ?? stripeFee)}</span>
+              </div>
+              <div className="flex justify-between font-semibold border-t border-gray-100 pt-2 mt-2">
+                <span>Total</span>
+                <span>{formatMXN(checkoutFees?.totalMxn ?? total)}</span>
+              </div>
+            </div>
+
+            <div className="border border-gray-200 rounded-lg p-4 text-sm">
+              <h3 className="font-semibold text-gray-900 mb-2">Comprador</h3>
+              <p className="text-gray-700">{buyerName}</p>
+              <p className="text-gray-500">{buyerEmail}</p>
+            </div>
+
+            {holderNames.some((n) => n.trim()) && (
+              <div className="border border-gray-200 rounded-lg p-4 text-sm">
+                <h3 className="font-semibold text-gray-900 mb-2">
+                  Titular{holderNames.length > 1 ? 'es' : ''} de boleto
+                </h3>
+                <ul className="space-y-1">
+                  {holderNames.map((name, i) => (
+                    <li key={i} className="text-gray-700">
+                      {holderNames.length > 1 && (
+                        <span className="text-gray-400 text-xs mr-1">{i + 1}.</span>
+                      )}
+                      {name}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          {/* Right — Stripe Elements */}
+          <div>
+            <h2 className="text-sm font-semibold text-gray-700 mb-4">Método de pago</h2>
+            <Elements stripe={stripePromise} options={{ clientSecret }}>
+              <CheckoutForm orderId={checkoutOrderId} />
+            </Elements>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-lg mx-auto px-4 py-10">
       <h1 className="text-2xl font-bold text-gray-900 mb-1">Comprar boleto</h1>
@@ -145,6 +260,10 @@ export default function CheckoutPage() {
         <div className="flex justify-between mb-2 text-gray-500">
           <span>Cargo por servicio</span>
           <span>{formatMXN(fee)}</span>
+        </div>
+        <div className="flex justify-between mb-2 text-gray-500">
+          <span>Cargo por transacción</span>
+          <span>{formatMXN(stripeFee)}</span>
         </div>
         <div className="flex justify-between font-semibold border-t border-gray-100 pt-2 mt-2">
           <span>Total</span>

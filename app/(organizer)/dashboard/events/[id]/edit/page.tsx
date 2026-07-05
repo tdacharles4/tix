@@ -49,6 +49,7 @@ export default function EditEventPage() {
   const [title,       setTitle]       = useState('');
   const [description, setDescription] = useState('');
   const [status,      setStatus]      = useState<Event['status']>('draft');
+  const [priceMxn, setPriceMxn] = useState(0);
 
   const [date,      setDate]      = useState('');
   const [timeStart, setTimeStart] = useState('');
@@ -78,6 +79,7 @@ export default function EditEventPage() {
       setTitle(ev.title);
       setDescription(ev.description ?? '');
       setStatus(ev.status);
+      setPriceMxn(ev.price_mxn);
       setDate(ev.date ? toLocalDate(ev.date) : '');
       setTimeStart(ev.date ? toLocalTime(ev.date) : '');
       setTimeEnd(ev.end_time ? toLocalTime(ev.end_time) : '');
@@ -108,6 +110,20 @@ export default function EditEventPage() {
 
     const primaryDate = new Date(`${date}T${timeStart || '00:00'}`).toISOString();
     const endTime     = timeEnd && date ? new Date(`${date}T${timeEnd}`).toISOString() : null;
+
+    if(status==='live' && priceMxn>0){
+      const { data: { user } } = await supabase.auth.getUser();
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('stripe_onboarding_complete')
+        .eq('id', user!.id)
+        .single();
+      if(!profile?.stripe_onboarding_complete){
+        setError('Es necesario conectar su cuenta a Stripe para activar eventos de paga.');
+        setLoading(false);
+        return;
+      }
+    }
 
     const locationFields =
       locationType !== 'presencial'

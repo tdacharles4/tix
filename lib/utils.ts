@@ -5,8 +5,10 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-export function getPlatformFee(quantity: number): number {
-  return Number(process.env.NEXT_PUBLIC_PLATFORM_FEE_MXN ?? 20) * quantity;
+export function getPlatformFee(unitPrice: number, quantity: number): number {
+  const pct = Number(process.env.NEXT_PUBLIC_PLATFORM_FEE_PERCENT ?? 10) / 100;
+  // Ceil to nearest centavo so we never round down
+  return Math.ceil(unitPrice * quantity * pct * 100) / 100;
 }
 
 

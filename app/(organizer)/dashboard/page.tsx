@@ -43,6 +43,9 @@ export default async function DashboardPage() {
           <Link href="/dashboard/earnings" className="text-sm text-gray-500 hover:text-gray-900">
             Mis ingresos
           </Link>
+          <Link href="/dashboard/scanners" className="text-sm text-gray-500 hover:text-gray-900">
+            Escáneres
+          </Link>
           <LogoutButton />
           <Link
             href="/dashboard/events/new"

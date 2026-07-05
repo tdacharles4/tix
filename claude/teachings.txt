@@ -1,954 +1,963 @@
-TASK #11 — STRIPE INTEGRATION PLAN
+TASK #16 — CHECK-IN SESSION SYSTEM (SCANNER AUTH)
 ================================================================================
-Last updated: 2026-07-03
-Scope: Replace Conekta with Stripe. Covers server-side integration (PaymentIntents,
-Stripe Connect Express), webhook fulfillment, organizer onboarding, in-site earnings
-dashboard, and frontend checkout form.
+Last updated: 2026-07-05
+Scope: Per-organizer scanner subaccounts. Custom JWT auth. Mobile-only access
+at scan.boleteo.com. Two panels: live dashboard (pie chart + guest list) and
+camera QR reader. Organizers create, manage, and delete scanner accounts from
+their main dashboard.
 
-WHY STRIPE CONNECT EXPRESS (not plain Stripe, not Stripe Custom)
+This file is the canonical implementation plan. Read it fully before touching
+any code. Each phase builds on the previous one — do not skip ahead.
+
+
+================================================================================
+ARCHITECTURE OVERVIEW
+================================================================================
+
+WHY CUSTOM JWT (not Supabase Auth)
 ────────────────────────────────────────────────────────────────
-Three account types exist in Stripe Connect:
+Scanner accounts are not real users. They have no email, no personal data,
+no ability to reset their own password, and no access to anything outside
+the scanner panel. Supabase Auth is overkill — it would create rows in
+auth.users, trigger email verification flows, and introduce unnecessary
+surface area.
 
-  Standard   — Organizer creates their own full Stripe account independently and
-               connects it to Boleteo via OAuth. They own their Stripe relationship.
-               Least control for Boleteo; most friction for organizers.
+Custom JWT approach:
+  - Organizer creates scanner accounts (username + hashed password) in a
+    scanner_accounts table
+  - On login, server verifies password, issues a signed JWT in an httpOnly cookie
+  - Middleware validates the cookie on every request to scanner routes
+  - Token carries { scanner_id, organizer_id } — all the context needed
 
-  Express    — Boleteo creates the account programmatically and sends organizer
-               through Stripe's hosted KYC/onboarding page. Organizer gets a
-               limited Stripe dashboard (payouts, balance). Boleteo controls the
-               experience; Stripe handles compliance. THIS IS THE RIGHT CHOICE.
-
-  Custom     — Boleteo owns everything, organizer has no Stripe presence at all.
-               Boleteo is responsible for KYC, fraud monitoring, disputes, and
-               compliance. Enormous legal and operational burden.
-
-Without Connect at all (Option B — Boleteo collects then pays out):
-  Boleteo holds third-party funds and disburses to organizers. In Mexico this
-  makes you a payment facilitator requiring CNBV registration (SOFOM/SOFIPO).
-  That is a financial license, not a startup decision. Do not do this.
-
-With Express: Stripe is the money transmitter. Each organizer is a Stripe account
-holder. Stripe handles their KYC, AML, and CLABE verification. Boleteo is legally
-a platform, not a financial institution.
-
-
-MONEY FLOW
+WHY httpOnly COOKIE (not localStorage or Authorization header)
 ────────────────────────────────────────────────────────────────
-For one ticket at 200 MXN:
+httpOnly cookies:
+  - Cannot be read by JavaScript (XSS-proof)
+  - Sent automatically on every request (no client-side token management)
+  - Works with Next.js middleware (middleware reads cookies, not headers)
+  - Correct for browser-based apps where the client and API share a domain
 
-  Buyer pays:          231.33 MXN  (gross, computed via formula below)
-  Stripe deducts:    –  11.33 MXN  (3.6% of 231.33 + 3 MXN)
-  Net after Stripe:    220.00 MXN
+localStorage would require manually attaching a token to every fetch call
+and is readable by any JavaScript on the page.
 
-  application_fee:   –  20.00 MXN  → Boleteo's Stripe balance
-  To organizer:        200.00 MXN  → organizer's Connected Account → CLABE
-
-Stripe's processing fee is NOT declared in the PaymentIntent. You only set `amount`
-(what the buyer pays) and `application_fee_amount` (Boleteo's cut). Stripe deducts
-their own fee from the gross automatically at settlement time (typically T+2 in MX).
-
-NOTE ON getPlatformFee(quantity):
-  lib/utils.ts line 9: `return Number(process.env.NEXT_PUBLIC_PLATFORM_FEE_MXN ?? 20) * quantity`
-  This is a FLAT fee per ticket (default 20 MXN), NOT a percentage.
-  On a 200 MXN ticket it happens to be 10%, but on a 500 MXN ticket it's 4%.
-  This discrepancy is flagged but not changed in this task — keep using the function
-  as-is and decide the correct fee structure separately.
-
-
-FEE FORMULA
+WHY SUBDOMAIN (scan.boleteo.com, not /scan route)
 ────────────────────────────────────────────────────────────────
-We want the organizer + Boleteo to net the subtotal EXACTLY after Stripe takes their
-cut. Stripe's fee on the gross = gross * 0.036 + 3. So:
+Two reasons:
 
-  gross - (gross * 0.036 + 3) = subtotal
-  gross * 0.964 - 3            = subtotal
-  gross * 0.964                = subtotal + 3
-  gross                        = (subtotal + 3) / 0.964
+1. Psychological separation. Door staff should have no way to accidentally
+   navigate to the organizer dashboard or buyer-facing pages. A subdomain
+   makes the scanner panel feel like a distinct tool.
 
-Working in centavos from the start to avoid floating-point errors:
+2. Cookie scoping. Cookies can be scoped to a subdomain. The scanner JWT
+   cookie is set with Domain=scan.boleteo.com — it will never be sent to
+   requests on boleteo.com. The organizer's Supabase session cookie will
+   never be sent to scan.boleteo.com. Clean separation by default.
 
-  totalCentavos = Math.ceil((subtotalCentavos + 300) / (1 - 0.036))
+In Next.js + Vercel, both boleteo.com and scan.boleteo.com point to the
+same deployment. Middleware reads req.nextUrl.hostname and handles routing.
+No separate Next.js app or repo needed.
 
-Math.ceil rounds up so the buyer absorbs any fractional-centavo rounding. The
-organizer + platform net subtotalCentavos or subtotalCentavos + 1 (rounding favor).
-Never round down — that puts the rounding loss on Boleteo's margin.
+WHY MOBILE-ONLY
+────────────────────────────────────────────────────────────────
+The scanner panel is designed for a door staff member holding a phone and
+scanning QR codes. A desktop layout is not designed, not tested, and
+would create a confusing experience. Middleware enforces mobile-only by
+reading the User-Agent header. Desktop browsers get a static redirect page.
 
-Put this in lib/stripe/fees.ts (pure math, no SDK — safe to import client-side
-for displaying the fee breakdown before the buyer confirms payment):
+SCANNER ACCOUNT SCOPE: PER-ORGANIZER (not per-event)
+────────────────────────────────────────────────────────────────
+Scanner accounts belong to an organizer, not to a specific event. This
+means door staff don't need a new account for every event. Instead they
+log in, see a list of the organizer's live/upcoming events, pick the one
+they're working, and proceed.
 
-  // lib/stripe/fees.ts
-  const STRIPE_RATE = 0.036;
-  const STRIPE_FIXED_CENTAVOS = 300; // 3 MXN
-
-  /**
-   * Given a subtotal in centavos (ticket price + platform fee),
-   * returns the total the buyer should be charged and the Stripe fee breakdown,
-   * both in centavos.
-   *
-   * Formula: gross = (subtotal + fixed) / (1 - rate)
-   * This ensures: gross - stripe_fee = subtotal exactly.
-   */
-  export function calculateStripeFees(subtotalCentavos: number): {
-    totalCentavos: number;
-    stripeFeeCentavos: number;
-  } {
-    const totalCentavos = Math.ceil(
-      (subtotalCentavos + STRIPE_FIXED_CENTAVOS) / (1 - STRIPE_RATE)
-    );
-    return {
-      totalCentavos,
-      stripeFeeCentavos: totalCentavos - subtotalCentavos,
-    };
-  }
-
-Why a separate file (not inlined in checkout/route.ts)?
-  The checkout PAGE needs to display the fee breakdown to the buyer BEFORE they
-  enter payment details. That means the formula runs client-side for display, then
-  again server-side when creating the PaymentIntent. A shared pure-math file avoids
-  duplicating the formula and guarantees both sides agree.
+Trade-off: a scanner account can theoretically scan for ANY of the
+organizer's events. This is acceptable — if the organizer trusts someone
+with their scanner credentials, they trust them across their events. If
+finer-grained control is needed later, add an event_ids allowlist column
+to scanner_accounts.
 
 
 ================================================================================
 PHASE 1 — SCHEMA
 ================================================================================
-Run both blocks in the Supabase SQL editor (local Studio at 127.0.0.1:54323 AND
-remote dashboard) — same two-instance rule as every prior schema change.
+Run in Supabase SQL editor.
 
-Block 1: orders table — replace Conekta reference with Stripe
+────────────────────────────────
+Block 1: scanner_accounts table
+────────────────────────────────
 
-  ALTER TABLE orders
-    RENAME COLUMN conekta_order_id TO stripe_payment_intent_id;
+  CREATE TABLE scanner_accounts (
+    id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    organizer_id uuid        NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    username     text        NOT NULL,
+    password_hash text       NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    UNIQUE(organizer_id, username)
+  );
 
-Why RENAME instead of DROP + ADD?
-  RENAME preserves the column in place — same position, same nullability, same
-  default, same any index that might exist. DROP + ADD would lose all that and
-  force a full table rewrite on large tables (not a concern now, but good habit).
+  -- Organizers can only see and manage their own scanner accounts
+  ALTER TABLE scanner_accounts ENABLE ROW LEVEL SECURITY;
 
-Block 2: profiles table — organizer's Stripe Connect account
+  CREATE POLICY "Organizers manage their own scanner accounts"
+    ON scanner_accounts
+    FOR ALL
+    USING (organizer_id = auth.uid())
+    WITH CHECK (organizer_id = auth.uid());
 
-  ALTER TABLE profiles
-    ADD COLUMN stripe_account_id text,
-    ADD COLUMN stripe_onboarding_complete boolean NOT NULL DEFAULT false;
+Why UNIQUE(organizer_id, username)?
+  Two organizers can both have a scanner named "puerta1" — that's fine.
+  One organizer cannot have two scanners with the same username — that
+  would create ambiguity at login (which one do you authenticate?).
 
-stripe_account_id: Stripe's `acct_XXXX` identifier. Stored so Boleteo can make
-  API calls on the organizer's behalf without re-fetching from Stripe each time.
+Why ON DELETE CASCADE?
+  If an organizer account is deleted, their scanner accounts go with it.
+  Orphaned scanner accounts that reference a deleted organizer are useless
+  and would hold a bcrypt hash with no associated context.
 
-stripe_onboarding_complete: Cached boolean. Stripe's `charges_enabled` is the
-  authoritative source, but checking it on every page load adds a Stripe API
-  round-trip. We cache the result locally. The cache is refreshed when:
-    a) Organizer returns from the onboarding flow (GET /api/stripe/connect/return)
-    b) The `account.updated` webhook fires with charges_enabled: true
+Why store password_hash and not password?
+  Passwords are never stored in plaintext. Ever. bcryptjs produces a hash
+  that cannot be reversed to the original password. Authentication works
+  by re-hashing the submitted password and comparing hashes.
 
-  An account can have stripe_account_id set but stripe_onboarding_complete = false
-  if the organizer started but didn't finish onboarding. That's intentional — we
-  hold the account ID so we don't create duplicates, and we can resume onboarding.
+Why RLS on this table?
+  Organizers list/create/delete their own scanner accounts from the
+  organizer dashboard (authenticated via Supabase Auth). RLS ensures
+  an organizer cannot accidentally view or delete another organizer's
+  scanner accounts even if there's a bug in the API layer.
+
+  Note: the scanner login API route uses createServiceClient() (service role,
+  bypasses RLS) because the scanner is not a Supabase Auth user — there is
+  no auth.uid() to match against when a scanner logs in.
+
+────────────────────────────────
+Block 2: Update lib/supabase/types.ts
+────────────────────────────────
+Add new type after CheckoutSession:
+
+  export type ScannerAccount = {
+    id: string;
+    organizer_id: string;
+    username: string;
+    password_hash: string;
+    created_at: string;
+  };
+
+Add to Database type under Tables:
+
+  scanner_accounts: {
+    Row: ScannerAccount;
+    Insert: Omit<ScannerAccount, 'id' | 'created_at'>;
+    Update: Partial<Pick<ScannerAccount, 'password_hash'>>;
+    Relationships: [];
+  };
+
+Never return password_hash to the client. All API routes that return
+scanner account data must explicitly select only { id, username, created_at }.
 
 
 ================================================================================
 PHASE 2 — PACKAGES + ENV VARS
 ================================================================================
-Install:
-  npm install stripe @stripe/stripe-js @stripe/react-stripe-js
 
-  stripe                — Stripe Node.js SDK. Server-side only.
-  @stripe/stripe-js     — Stripe.js browser library. Loads Stripe's script from
-                          Stripe's CDN (required for PCI compliance — Stripe's
-                          tokenization must run on their own CDN, not your bundle).
-  @stripe/react-stripe-js — React wrappers (Elements, PaymentElement, etc.)
+Install:
+  npm install bcryptjs jose html5-qrcode
+  npm install --save-dev @types/bcryptjs
+
+  bcryptjs  — Pure JS bcrypt implementation. No native bindings — works in
+              Next.js Node.js runtime without compilation issues. Used for
+              password hashing and comparison.
+
+  jose      — JavaScript JWT library. Supports Edge Runtime (unlike jsonwebtoken
+              which requires Node.js crypto module). Used to sign and verify the
+              scanner JWT. This is the library Next.js Auth.js uses internally.
+
+  html5-qrcode — Camera-based QR code scanner for mobile browsers. Wraps the
+                 device camera API and decodes QR codes in real time. Works on
+                 iOS Safari (requires HTTPS in production) and Android Chrome.
+                 Alternative: @zxing/browser (heavier, more formats). html5-qrcode
+                 is simpler and sufficient for QR-only use.
 
 Env vars to add to .env.local:
-  STRIPE_SECRET_KEY=sk_test_...
-    Found in: Stripe Dashboard → Developers → API keys
-    Server-only. NEVER prefix with NEXT_PUBLIC_. Never log it.
+  SCANNER_JWT_SECRET=<random string>
+    Generate with: openssl rand -hex 32
+    Used to sign and verify scanner JWTs. Server-only — never prefix NEXT_PUBLIC_.
+    If this secret is rotated, all active scanner sessions are invalidated
+    (all door staff will need to log in again). Treat it like a password.
 
-  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_...
-    Found in: same place. Safe to expose to browser (that's its purpose).
-    The publishable key only allows creating payment tokens — it cannot charge
-    or read account data. Stripe's security model is built around this split.
-
-  STRIPE_WEBHOOK_SECRET=whsec_...
-    Generated by the Stripe CLI when you run `stripe listen` (local dev) or
-    by Stripe Dashboard → Webhooks → Add endpoint (production).
-    Used to verify webhook signatures. See Phase 10 for CLI setup.
+  ⚠️ WINDOWS NOTE: If switching to a Windows machine, .env.local must be
+  manually created in the project root. Windows does not read it automatically
+  in all shell environments. Confirm Next.js picks up all variables on first run
+  by checking that the app boots without "X is not set" errors.
 
 
 ================================================================================
-PHASE 3 — lib/stripe/client.ts
+PHASE 3 — AUTH INFRASTRUCTURE
 ================================================================================
-Delete lib/conekta/client.ts and lib/conekta/webhook.ts. Create this instead.
 
-  // lib/stripe/client.ts
-  import Stripe from 'stripe';
+────────────────────────────────
+3a. lib/scanner/password.ts
+────────────────────────────────
+Pure utility functions — no framework dependencies.
 
-  if (!process.env.STRIPE_SECRET_KEY) {
-    throw new Error('STRIPE_SECRET_KEY is not set');
+  import bcrypt from 'bcryptjs';
+
+  const SALT_ROUNDS = 12;
+
+  export async function hashPassword(password: string): Promise<string> {
+    return bcrypt.hash(password, SALT_ROUNDS);
   }
 
-  export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-    apiVersion: '2025-06-30.basil',
-  });
-
-Why throw at module load time instead of relying on TypeScript's `!` assertion?
-  If the env var is missing, you want a clear error ("STRIPE_SECRET_KEY is not set")
-  at startup — not a mysterious "Cannot read properties of undefined" when the first
-  Stripe call fires at runtime. This pattern surfaces config problems immediately.
-
-Why pin apiVersion?
-  Stripe releases breaking API changes under new version strings. Without pinning,
-  the SDK picks up the latest version, and a future Stripe release could silently
-  break response shapes your code depends on. The pinned version here matches the
-  latest at the time this was written — update it intentionally, not accidentally.
-
-Why not use the Stripe constructor with `typescript: true`?
-  That option was removed in stripe@13+. The package ships its own TypeScript
-  types by default now. No extra config needed.
-
-No webhook.ts needed alongside client.ts — unlike Conekta's manual HMAC-SHA256
-verification, Stripe's verification is a single SDK call:
-  `stripe.webhooks.constructEvent(rawBody, sig, secret)`
-That call lives directly in the webhook route handler (see Phase 6).
-
-
-================================================================================
-PHASE 4 — ORGANIZER CONNECT ONBOARDING
-================================================================================
-Two new API endpoints + one dashboard guard.
-
-────────────────────────────────
-4a. POST /api/stripe/connect
-────────────────────────────────
-Called when the organizer clicks "Connect bank account" in the dashboard.
-Creates a Stripe Express account (if none exists) and returns a one-time
-hosted onboarding URL.
-
-  // app/api/stripe/connect/route.ts
-  import { NextRequest, NextResponse } from 'next/server';
-  import { createServiceClient } from '@/lib/supabase/server';
-  import { stripe } from '@/lib/stripe/client';
-
-  export async function POST(req: NextRequest) {
-    const supabase = createServiceClient();
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('stripe_account_id, stripe_onboarding_complete')
-      .eq('id', user.id)
-      .single();
-
-    if (!profile) return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
-
-    // If already complete, no need to re-onboard
-    if (profile.stripe_onboarding_complete) {
-      return NextResponse.json({ alreadyConnected: true });
-    }
-
-    let accountId = profile.stripe_account_id;
-
-    // Create Express account if this organizer has never started onboarding
-    if (!accountId) {
-      const account = await stripe.accounts.create({
-        type: 'express',
-        country: 'MX',
-        email: user.email!,
-        capabilities: {
-          card_payments: { requested: true },
-          transfers: { requested: true },
-        },
-      });
-      accountId = account.id;
-
-      await supabase
-        .from('profiles')
-        .update({ stripe_account_id: accountId })
-        .eq('id', user.id);
-    }
-
-    // AccountLinks are single-use and expire — always generate a fresh one
-    const accountLink = await stripe.accountLinks.create({
-      account: accountId,
-      return_url:  `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/stripe/return`,
-      refresh_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/stripe/refresh`,
-      type: 'account_onboarding',
-    });
-
-    return NextResponse.json({ url: accountLink.url });
+  export async function verifyPassword(
+    password: string,
+    hash: string,
+  ): Promise<boolean> {
+    return bcrypt.compare(password, hash);
   }
 
-Why `capabilities: { card_payments, transfers }`?
-  In Mexico with Express accounts, you must explicitly request capabilities.
-  `card_payments` allows the account to receive funds from card charges.
-  `transfers` allows Stripe to route funds to them via `transfer_data` in a
-  PaymentIntent. Without both, the PaymentIntent creation will fail.
-
-Why check `stripe_onboarding_complete` before creating an account?
-  Idempotency. If the organizer hits this endpoint again (e.g., clicks the button
-  twice), we don't create duplicate Stripe accounts. The account ID gate
-  (`if (!accountId)`) handles the "started but not finished" case.
-
-Why always generate a fresh AccountLink?
-  AccountLinks are single-use and expire after a short window (~5 minutes). You
-  cannot reuse them. Always generate at the moment the user is about to be
-  redirected.
-
-What is refresh_url?
-  If the AccountLink expires before the organizer finishes (they left the tab open
-  for too long, or hit back), Stripe redirects them to refresh_url. Your page at
-  that URL should call POST /api/stripe/connect again to get a fresh link and
-  redirect immediately.
+Why SALT_ROUNDS = 12?
+  bcrypt's cost factor is exponential — rounds=12 means 2^12 = 4096 hashing
+  iterations, taking ~250ms on modern hardware. This makes brute-force attacks
+  impractical: an attacker trying 1 million passwords would need ~70 hours.
+  rounds=10 (bcrypt default) is acceptable; 12 is the current security
+  recommendation for 2025+. Do not go above 14 without benchmarking — it
+  will make your login endpoint noticeably slow.
 
 ────────────────────────────────
-4b. GET /api/stripe/connect/return
-────────────────────────────────
-Called when Stripe redirects the organizer back after onboarding.
-Checks whether onboarding is actually complete and caches the result.
-
-  // app/api/stripe/connect/return/route.ts
-  import { NextRequest, NextResponse } from 'next/server';
-  import { createServiceClient } from '@/lib/supabase/server';
-  import { stripe } from '@/lib/stripe/client';
-
-  export async function GET(req: NextRequest) {
-    const supabase = createServiceClient();
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.redirect(new URL('/auth/login', req.url));
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('stripe_account_id')
-      .eq('id', user.id)
-      .single();
-
-    if (!profile?.stripe_account_id) {
-      return NextResponse.redirect(new URL('/dashboard', req.url));
-    }
-
-    const account = await stripe.accounts.retrieve(profile.stripe_account_id);
-
-    if (account.charges_enabled && account.payouts_enabled) {
-      await supabase
-        .from('profiles')
-        .update({ stripe_onboarding_complete: true })
-        .eq('id', user.id);
-
-      return NextResponse.redirect(
-        new URL('/dashboard?stripe=connected', req.url)
-      );
-    }
-
-    // Onboarding started but not finished (missing documents, CLABE not verified, etc.)
-    return NextResponse.redirect(
-      new URL('/dashboard?stripe=incomplete', req.url)
-    );
-  }
-
-Why check both charges_enabled AND payouts_enabled?
-  charges_enabled = Stripe can accept payments destined for this account.
-  payouts_enabled = Stripe can pay out to their linked bank account (CLABE).
-  An account can have charges_enabled: true but payouts_enabled: false if their
-  CLABE hasn't been verified yet. Both must be true before going live.
-
-Why not use a webhook for this check?
-  Stripe fires `account.updated` when onboarding status changes, which is more
-  reliable than the return URL (the user might close the tab before returning).
-  Add an `account.updated` handler in the webhook route later as a belt-and-
-  suspenders approach, but the return URL check handles the happy path UX.
-
-────────────────────────────────
-4c. Dashboard publish guard
-────────────────────────────────
-Before an organizer can set an event status to 'live', check that their Stripe
-account is connected IF the event has a price. Free events skip Stripe entirely.
-
-This guard belongs in whatever endpoint handles event publishing
-(e.g., a PATCH /api/events/[id] or the event status update flow):
-
-  // Inside the event publish handler, before setting status: 'live'
-  if (event.price_mxn > 0) {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('stripe_onboarding_complete')
-      .eq('id', event.organizer_id)
-      .single();
-
-    if (!profile?.stripe_onboarding_complete) {
-      return NextResponse.json(
-        { error: 'Complete Stripe onboarding before publishing paid events' },
-        { status: 403 }
-      );
-    }
-  }
-
-Why only for price_mxn > 0?
-  Free events never touch Stripe — no PaymentIntent is created, no Connect needed.
-  A free event can go live without any Stripe setup.
-
-
-================================================================================
-PHASE 5 — app/api/checkout/route.ts (UPDATED)
-================================================================================
-Current behavior:
-  lockInventory → create tickets (active) → mark order paid → return { orderId }
-
-New behavior:
-  lockInventory → create PaymentIntent → store stripe_payment_intent_id on order
-  → return { clientSecret, orderId, fees }
-
-What is removed:
-  Lines 79–92 (ticket insert block) — moves to webhook handler
-  Lines 95–105 (Conekta stub comment + immediate paid status) — replaced entirely
-
-What is added after lockInventory():
-
-  // Fetch organizer's Stripe account for transfer_data
-  const { data: organizer } = await supabase
-    .from('profiles')
-    .select('stripe_account_id')
-    .eq('id', event.organizer_id)
-    .single();
-
-  if (!organizer?.stripe_account_id) {
-    // Caught by the publish guard, but defensive fallback
-    return NextResponse.json(
-      { error: 'Organizer payment account not configured' },
-      { status: 503 }
-    );
-  }
-
-  const platformFee   = getPlatformFee(quantity);         // Boleteo's cut (MXN)
-  const ticketSubtotal = unitPrice * quantity;             // unitPrice = unitPriceOverride ?? event.price_mxn
-  const subtotalCentavos = Math.round((ticketSubtotal + platformFee) * 100);
-
-  const { totalCentavos, stripeFeeCentavos } = calculateStripeFees(subtotalCentavos);
-
-  const paymentIntent = await stripe.paymentIntents.create({
-    amount: totalCentavos,                               // centavos, integer — what buyer pays
-    currency: 'mxn',
-    application_fee_amount: Math.round(platformFee * 100), // Boleteo's cut in centavos
-    transfer_data: {
-      destination: organizer.stripe_account_id,          // acct_XXXX — organizer's Express account
-    },
-    metadata: {
-      order_id:              orderId,
-      ticket_type_config_id: session.ticket_type_config_id ?? '',
-      holder_names:          JSON.stringify(names),      // names already computed above
-      ticket_type_name:      ticketTypeName,             // ticketTypeName already computed above
-    },
-  });
-
-  // Store the PaymentIntent ID on the order so the webhook can look it up
-  await supabase
-    .from('orders')
-    .update({ stripe_payment_intent_id: paymentIntent.id })
-    .eq('id', orderId);
-
-  return NextResponse.json({
-    clientSecret: paymentIntent.client_secret,
-    orderId,
-    fees: {
-      ticketSubtotalMxn: ticketSubtotal,
-      platformFeeMxn:    platformFee,
-      stripeFeeMxn:      stripeFeeCentavos / 100,
-      totalMxn:          totalCentavos / 100,
-    },
-  });
-
-Why Math.round for subtotalCentavos (not Math.ceil)?
-  We're converting an already-computed MXN value to centavos. A ticket at 200 MXN
-  is exactly 20000 centavos — no rounding loss. Math.round handles any floating-
-  point imprecision (e.g., 0.1 + 0.2 = 0.30000000000000004). Math.ceil here would
-  silently overcharge by 1 centavo if there's float noise.
-
-Why Math.round for application_fee_amount (not Math.ceil)?
-  Same reason. Platform fee is already an integer MXN value (getPlatformFee returns
-  a whole number). Math.round is safe and more correct than ceiling.
-
-Why pass fees back in the response?
-  The checkout page needs to show the buyer a fee breakdown (ticket subtotal +
-  platform fee + Stripe processing fee + total) before they enter payment details.
-  Returning the authoritative server-side calculation avoids any client/server
-  discrepancy in what's displayed vs what's charged.
-
-Why store metadata on the PaymentIntent instead of adding columns to orders?
-  The webhook handler needs ticket_type_config_id and holder_names to create ticket
-  rows. These are available at checkout time but not stored on the orders table.
-  Options:
-    a) Add columns to orders (extra schema work, data that belongs to checkout context)
-    b) Store in PaymentIntent metadata (free, no schema change, available in webhook)
-  Option b is clean for data that's only needed during fulfillment. Stripe
-  metadata values are capped at 500 chars each — holder_names as a JSON array of
-  10 names at 50 chars each fits comfortably.
-
-Why look up the organizer separately instead of joining in the events query?
-  The events table doesn't store organizer payment info — that's on profiles. A
-  JOIN would work but keeping the queries separate makes each one's intent clearer.
-
-NOTE: `unitPrice` for the fee calculation:
-  unitPrice is defined earlier in the route as:
-    let unitPriceOverride: number | undefined;
-    // ... if session.ticket_type_config_id, set unitPriceOverride = tc.price_mxn
-  Then passed to lockInventory. For the Stripe amount:
-    const unitPrice = unitPriceOverride ?? event.price_mxn;
-  Add this line before the fee calculation block.
-
-
-================================================================================
-PHASE 6 — app/api/webhooks/stripe/route.ts (NEW FILE)
-================================================================================
-Delete app/api/webhooks/conekta/route.ts. Create this instead.
-
-  import { NextRequest, NextResponse } from 'next/server';
-  import Stripe from 'stripe';
-  import { stripe } from '@/lib/stripe/client';
-  import { createServiceClient } from '@/lib/supabase/server';
-  import { generateQRCode } from '@/lib/qr/generate';
-  import { resend } from '@/lib/resend/client';
-  import { TicketEmail } from '@/lib/resend/templates/ticket-email';
-  import * as React from 'react';
-
-  export async function POST(req: NextRequest) {
-    const rawBody = await req.text();
-    const sig = req.headers.get('stripe-signature');
-
-    if (!sig) {
-      return NextResponse.json({ error: 'Missing Stripe-Signature header' }, { status: 400 });
-    }
-
-    let event: Stripe.Event;
-    try {
-      event = stripe.webhooks.constructEvent(
-        rawBody,
-        sig,
-        process.env.STRIPE_WEBHOOK_SECRET!
-      );
-    } catch (err) {
-      console.error('Webhook signature verification failed:', err);
-      return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
-    }
-
-    const supabase = createServiceClient();
-
-    switch (event.type) {
-      case 'payment_intent.succeeded': {
-        const pi = event.data.object as Stripe.PaymentIntent;
-        await handlePaymentSucceeded(pi, supabase);
-        break;
-      }
-      case 'payment_intent.payment_failed': {
-        const pi = event.data.object as Stripe.PaymentIntent;
-        await handlePaymentFailed(pi, supabase);
-        break;
-      }
-      // All other event types: acknowledge and ignore.
-      // Stripe retries webhooks that return non-2xx — always return 200 for events
-      // you don't handle, or Stripe will keep retrying indefinitely.
-    }
-
-    return NextResponse.json({ received: true });
-  }
-
-Why req.text() and not req.json()?
-  stripe.webhooks.constructEvent() verifies a signature over the raw request bytes.
-  If you parse JSON first (req.json()), Node re-serializes the object, which can
-  subtly change whitespace or key ordering — breaking the signature check. Always
-  read raw bytes, then parse manually if needed. Next.js App Router does NOT
-  auto-parse the body, so req.text() gives you the raw string Stripe signed.
-
-Why a switch instead of if/else?
-  Scalability. Adding a new event type is one new `case` block. TypeScript can also
-  narrow `event.data.object` properly within each case when using the Stripe types.
-
-────────────────────────────────
-handlePaymentSucceeded
+3b. lib/scanner/jwt.ts
 ────────────────────────────────
 
-  async function handlePaymentSucceeded(
-    pi: Stripe.PaymentIntent,
-    supabase: ReturnType<typeof createServiceClient>
-  ) {
-    const { order_id, ticket_type_config_id, holder_names, ticket_type_name } = pi.metadata;
+  import { SignJWT, jwtVerify } from 'jose';
 
-    const { data: order, error: orderError } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('id', order_id)
-      .single();
+  const SECRET = new TextEncoder().encode(process.env.SCANNER_JWT_SECRET!);
+  const EXPIRY = '8h';
 
-    if (orderError || !order) {
-      // Log but do NOT throw. Throwing causes the route to return 500,
-      // which makes Stripe retry. If the order is genuinely missing,
-      // retrying won't help and just creates noise. Return 200 + log.
-      console.error('Order not found for payment_intent:', pi.id, 'order_id:', order_id);
-      return;
-    }
-
-    // Idempotency guard — Stripe can fire the same event more than once
-    // (network issues, Stripe's own delivery guarantees). Skip if already processed.
-    if (order.status === 'paid') return;
-
-    const { data: eventData } = await supabase
-      .from('events')
-      .select('*')
-      .eq('id', order.event_id)
-      .single();
-
-    if (!eventData) {
-      console.error('Event not found for order:', order.id);
-      return;
-    }
-
-    // 1. Mark order paid
-    const { error: updateErr } = await supabase
-      .from('orders')
-      .update({ status: 'paid' })
-      .eq('id', order.id);
-
-    if (updateErr) {
-      console.error('Failed to update order status:', updateErr);
-      return;
-    }
-
-    // 2. Create ticket rows (fixed version: no qr_code, correct fields)
-    const names: string[] = (() => {
-      try { return JSON.parse(holder_names || '[]'); }
-      catch { return []; }
-    })();
-
-    const ticketInserts = Array.from({ length: order.quantity }, (_, i) => ({
-      order_id:              order.id,
-      event_id:              order.event_id,
-      buyer_id:              null,
-      buyer_email:           order.buyer_email,
-      holder_name:           names[i]?.trim() || order.buyer_name,
-      ticket_type:           ticket_type_name || 'General',
-      ticket_type_config_id: ticket_type_config_id || null,
-      status:                'active' as const,
-    }));
-
-    const { data: tickets, error: ticketError } = await supabase
-      .from('tickets')
-      .insert(ticketInserts)
-      .select();
-
-    if (ticketError || !tickets) {
-      console.error('Ticket insert failed:', ticketError);
-      return;
-    }
-
-    // 3. Send ticket emails
-    for (const ticket of tickets) {
-      const qrBase64 = await generateQRCode(ticket.id);
-
-      await resend.emails.send({
-        from:    'boletos@boletera.mx',
-        to:      order.buyer_email,
-        subject: `Tu boleto para ${eventData.title}`,
-        react:   React.createElement(TicketEmail, {
-          event:        eventData,
-          ticket,
-          buyerName:    order.buyer_name,
-          qrCodeBase64: qrBase64,
-        }),
-      });
-
-      await supabase
-        .from('tickets')
-        .update({ email_sent_at: new Date().toISOString() })
-        .eq('id', ticket.id);
-    }
-  }
-
-Why try/catch around JSON.parse(holder_names)?
-  metadata values are strings. If something corrupted the JSON (truncation, bad
-  encoding), a thrown SyntaxError would abort ticket creation for all buyers.
-  Fallback to [] means all holders get buyer_name — worse UX, but tickets still
-  get created and emails still go out.
-
-Why buyer_id: null?
-  The current schema/RPC creates orders with buyer_id null (guest checkout). Once
-  buyer accounts exist, thread order.buyer_id here instead.
-
-────────────────────────────────
-handlePaymentFailed
-────────────────────────────────
-
-  async function handlePaymentFailed(
-    pi: Stripe.PaymentIntent,
-    supabase: ReturnType<typeof createServiceClient>
-  ) {
-    const { order_id } = pi.metadata;
-    if (!order_id) return;
-
-    const { data: order } = await supabase
-      .from('orders')
-      .select('event_id, quantity, status')
-      .eq('id', order_id)
-      .single();
-
-    // Only roll back if still pending — idempotency guard
-    if (!order || order.status !== 'pending') return;
-
-    // Roll back inventory (Task #6 — this is where release_inventory finally gets called)
-    await supabase.rpc('release_inventory', {
-      p_event_id: order.event_id,
-      p_quantity:  order.quantity,
-    });
-
-    await supabase
-      .from('orders')
-      .update({ status: 'failed' })
-      .eq('id', order_id);
-  }
-
-This completes Task #6 (inventory rollback) as a side effect of Task #11.
-release_inventory was already defined in SQL but never called in app code.
-A failed payment is the correct trigger for rolling back reserved inventory.
-
-NOTE: release_inventory only decrements events.tickets_sold. If the order had a
-ticket_type_config_id, ticket_type_configs.tickets_sold also needs decrementing.
-The current release_inventory SQL may not handle that — verify before shipping.
-
-
-================================================================================
-PHASE 7 — lib/supabase/types.ts (UPDATES)
-================================================================================
-Four changes needed:
-
-1. Profile type (line 6): add two new fields
-   stripe_account_id: string | null;
-   stripe_onboarding_complete: boolean;
-
-2. Order type (line 71): rename the column reference
-   conekta_order_id: string | null;
-   → stripe_payment_intent_id: string | null;
-
-3. orders table Insert (line 171): rename the optional intersection field
-   & { conekta_order_id?: string | null }
-   → & { stripe_payment_intent_id?: string | null }
-
-4. profiles table Insert/Update (lines 152-153): add the new profile fields
-   to the Update partial so you can update them:
-     stripe_account_id?: string | null;
-     stripe_onboarding_complete?: boolean;
-
-profiles.conekta_customer_id stays in the type for now — the column exists on
-the remote DB. Remove it in a future cleanup pass (column rename + type update).
-
-
-================================================================================
-PHASE 8 — FRONTEND CHECKOUT PAGE
-================================================================================
-The checkout page (read it before modifying — location TBD) currently submits to
-POST /api/checkout and receives { orderId }, then redirects to a success page.
-
-New flow:
-  1. Page calls POST /api/checkout → receives { clientSecret, orderId, fees }
-  2. Display fee breakdown to buyer (ticketSubtotal + platformFee + stripeFee = total)
-  3. Render Stripe Elements payment form using clientSecret
-  4. Buyer fills in card details + clicks Pay
-  5. stripe.confirmPayment() handles payment on Stripe's side
-  6. On success: redirect to /orders/[orderId]/confirmation
-
-Setup at the page/layout level:
-  import { loadStripe } from '@stripe/stripe-js';
-  import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
-
-  // Outside the component — only create this once, not on every render
-  const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
-
-  // After POST /api/checkout returns clientSecret:
-  <Elements stripe={stripePromise} options={{ clientSecret }}>
-    <CheckoutForm orderId={orderId} />
-  </Elements>
-
-Inside CheckoutForm:
-  const stripe = useStripe();
-  const elements = useElements();
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!stripe || !elements) return;
-
-    const { error } = await stripe.confirmPayment({
-      elements,
-      confirmParams: {
-        return_url: `${window.location.origin}/orders/${orderId}/confirmation`,
-      },
-    });
-
-    // confirmPayment redirects on success — this line only runs on error
-    if (error) setErrorMessage(error.message ?? 'Payment failed');
+  export type ScannerJWTPayload = {
+    scanner_id: string;
+    organizer_id: string;
   };
 
-  return (
-    <form onSubmit={handleSubmit}>
-      <PaymentElement />
-      <button type="submit" disabled={!stripe}>Pagar</button>
-      {errorMessage && <p>{errorMessage}</p>}
-    </form>
-  );
+  export async function signScannerToken(payload: ScannerJWTPayload): Promise<string> {
+    return new SignJWT(payload)
+      .setProtectedHeader({ alg: 'HS256' })
+      .setIssuedAt()
+      .setExpirationTime(EXPIRY)
+      .sign(SECRET);
+  }
 
-Why loadStripe outside the component?
-  loadStripe fetches Stripe.js from Stripe's CDN. If called inside the component,
-  it re-fetches on every render. The stripePromise reference stays stable across
-  renders when created at module level.
+  export async function verifyScannerToken(
+    token: string,
+  ): Promise<ScannerJWTPayload | null> {
+    try {
+      const { payload } = await jwtVerify(token, SECRET);
+      return payload as unknown as ScannerJWTPayload;
+    } catch {
+      return null; // expired, tampered, or malformed
+    }
+  }
 
-Why PaymentElement over CardElement?
-  PaymentElement is Stripe's newer component that adapts to the customer's location
-  and shows all available payment methods (card, OXXO, SPEI, etc.) automatically.
-  CardElement only shows a card form. In Mexico, OXXO and SPEI are important payment
-  methods — PaymentElement surfaces them without any extra configuration.
+Why 8h expiry?
+  A typical event runs 4–6 hours. 8h covers setup, the event, and teardown
+  without forcing door staff to re-authenticate mid-event. Shorter expiry
+  (1h) would cause frustrating login loops. Longer (24h) is unnecessarily
+  permissive. 8h is the right balance.
 
-Why does confirmPayment redirect on success?
-  Stripe redirects the browser to return_url after successful payment confirmation.
-  The `error` block only runs when payment fails synchronously (invalid card, etc.).
-  This is Stripe's standard flow for PaymentElement.
+Why HS256 (symmetric) and not RS256 (asymmetric)?
+  RS256 requires a public/private key pair. It's valuable when multiple
+  services need to verify the token independently (microservices). Here,
+  all verification happens in one Next.js app. HS256 with a strong secret
+  is simpler and equally secure for this use case.
 
-The /orders/[orderId]/confirmation page:
-  Does NOT need to verify payment status — that's the webhook's job. The page
-  can just show "Payment received — your tickets will be emailed to you shortly."
-  Optionally: poll order.status or use Supabase Realtime to flip UI when webhook
-  marks the order paid and tickets are created.
+────────────────────────────────
+3c. lib/scanner/cookies.ts
+────────────────────────────────
 
+  import { cookies } from 'next/headers';
 
-================================================================================
-PHASE 9 — IN-SITE EARNINGS DASHBOARD
-================================================================================
-Instead of redirecting organizers to Stripe's Express dashboard, fetch earnings
-data from Stripe's API on their behalf using `{ stripeAccount: acct_XXXX }`.
+  export const SCANNER_COOKIE = 'scanner_token';
 
-  // In an organizer dashboard server component or API route:
-  const [balance, transactions, payouts] = await Promise.all([
-    stripe.balance.retrieve({}, { stripeAccount: profile.stripe_account_id }),
-    stripe.balanceTransactions.list(
-      { limit: 50, type: 'payment', expand: ['data.source'] },
-      { stripeAccount: profile.stripe_account_id }
-    ),
-    stripe.payouts.list(
-      { limit: 20 },
-      { stripeAccount: profile.stripe_account_id }
-    ),
-  ]);
+  export function setScannerCookie(token: string) {
+    cookies().set(SCANNER_COOKIE, token, {
+      httpOnly: true,
+      secure:   process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge:   8 * 60 * 60, // 8 hours in seconds
+      path:     '/',
+    });
+  }
 
-What each call returns:
-  balance: { available: [{ amount, currency }], pending: [{ amount, currency }] }
-    available = funds that can be paid out now
-    pending   = funds still in the settlement window (T+2 in MX)
+  export function clearScannerCookie() {
+    cookies().set(SCANNER_COOKIE, '', {
+      httpOnly: true,
+      secure:   process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge:   0,
+      path:     '/',
+    });
+  }
 
-  balanceTransactions: each entry represents a settled charge. Useful fields:
-    amount, fee, net, created, description, source.payment_intent (if expanded)
+Why secure: true only in production?
+  secure: true requires HTTPS. In local development, Next.js runs on HTTP
+  (localhost). Setting secure: true locally would prevent the cookie from
+  being set at all, breaking local testing. In production on Vercel, all
+  traffic is HTTPS, so secure: true is enforced there.
 
-  payouts: each entry represents a transfer to the organizer's CLABE. Useful fields:
-    amount, arrival_date, status ('paid', 'in_transit', 'pending', 'failed')
-
-What you CANNOT do in-site (must still redirect to Stripe Express):
-  - Organizer changes their CLABE / bank account
-  - Organizer views tax documents (annual 1099 equivalent)
-  - Organizer initiates a manual payout
-  - Organizer disputes a chargeback
-
-For those, generate a login link to the Stripe Express dashboard:
-  const loginLink = await stripe.accounts.createLoginLink(profile.stripe_account_id);
-  // Redirect to loginLink.url — it's a one-time, short-lived link
-
-Keep a "Go to Stripe dashboard" button for account management.
-Build the read-only earnings view (balance, recent transactions, payout history)
-in-site using the API calls above.
+Why sameSite: 'strict'?
+  Prevents the cookie from being sent on cross-site requests (CSRF attacks).
+  Since the scanner panel is a standalone tool accessed directly, strict is
+  appropriate. If you ever need to embed the scanner in an iframe from another
+  domain, change to 'lax'.
 
 
 ================================================================================
-PHASE 10 — LOCAL TESTING WITH STRIPE CLI
+PHASE 4 — API ROUTES (AUTH)
 ================================================================================
-Install Stripe CLI (one-time):
-  brew install stripe/stripe-cli/stripe
 
-Authenticate (one-time):
-  stripe login
-  # Opens browser, authenticate with your Stripe account
+────────────────────────────────
+4a. POST /api/scanner/login
+────────────────────────────────
 
-Forward webhooks to local server:
-  stripe listen --forward-to localhost:3000/api/webhooks/stripe
-  # Prints: "Your webhook signing secret is whsec_..."
-  # Copy that value into .env.local as STRIPE_WEBHOOK_SECRET
+  // app/api/scanner/login/route.ts
+  import { NextRequest, NextResponse } from 'next/server';
+  import { createServiceClient } from '@/lib/supabase/server';
+  import { verifyPassword } from '@/lib/scanner/password';
+  import { signScannerToken } from '@/lib/scanner/jwt';
+  import { setScannerCookie } from '@/lib/scanner/cookies';
 
-Test cards (in Stripe sandbox):
-  4242 4242 4242 4242  — Always succeeds. Any future expiry. Any CVC.
-  4000 0000 0000 9995  — Insufficient funds (triggers payment_failed)
-  4000 0025 0000 3155  — Requires 3D Secure authentication
-  4000 0000 0000 0002  — Generic decline
+  export async function POST(req: NextRequest) {
+    const { username, password } = await req.json();
 
-Trigger test events manually (useful for testing the webhook without going through
-the full checkout UI):
-  stripe trigger payment_intent.succeeded
-  stripe trigger payment_intent.payment_failed
+    if (!username || !password) {
+      return NextResponse.json({ error: 'Missing credentials' }, { status: 400 });
+    }
 
-Note: `stripe trigger` fires events with synthetic data that won't have your
-metadata (order_id, etc.). The webhook handler's null checks and logs will fire.
-For a real end-to-end test, go through the actual checkout flow with a test card.
+    const supabase = createServiceClient();
 
-Connect account testing:
-  In Stripe sandbox, when an organizer goes through Express onboarding, they'll
-  see test mode onboarding screens. Use test data for SSN (000-00-0000 in US),
-  CLABE, etc. Stripe provides test routing numbers for sandbox accounts.
+    // Look up by username only — no organizer context at login time
+    // (username is globally unique per organizer; we identify organizer from the row)
+    const { data: account } = await supabase
+      .from('scanner_accounts')
+      .select('id, organizer_id, password_hash')
+      .eq('username', username)
+      .single();
+
+    if (!account) {
+      // Constant-time failure — don't reveal whether username exists
+      await verifyPassword('__dummy__', '$2b$12$invalidhashpadding000000000000000000000000000000000000');
+      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+    }
+
+    const valid = await verifyPassword(password, account.password_hash);
+    if (!valid) {
+      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+    }
+
+    const token = await signScannerToken({
+      scanner_id:   account.id,
+      organizer_id: account.organizer_id,
+    });
+
+    setScannerCookie(token);
+    return NextResponse.json({ ok: true });
+  }
+
+Why the dummy bcrypt call on username-not-found?
+  Without it, an attacker can measure response time to enumerate valid usernames:
+  "if this username doesn't exist, the response is fast; if it does, it's slow
+  (bcrypt takes 250ms)." The dummy call makes both paths take ~250ms.
+  The dummy hash is intentionally invalid — bcrypt.compare returns false,
+  and we return 401. No security impact, but timing is equalized.
+
+Why not include the organizer_id in the login request?
+  Requiring the organizer_id or a "team code" at login adds friction without
+  adding meaningful security (if you have the username and password, you have
+  the organizer_id). Simplicity wins here.
+
+────────────────────────────────
+4b. POST /api/scanner/logout
+────────────────────────────────
+
+  // app/api/scanner/logout/route.ts
+  import { NextResponse } from 'next/server';
+  import { clearScannerCookie } from '@/lib/scanner/cookies';
+
+  export async function POST() {
+    clearScannerCookie();
+    return NextResponse.json({ ok: true });
+  }
 
 
 ================================================================================
-CLEANUP
+PHASE 5 — API ROUTES (SCANNER DATA)
 ================================================================================
-After the Stripe integration is verified end-to-end:
 
-Delete:
-  lib/conekta/client.ts
-  lib/conekta/webhook.ts
-  app/api/webhooks/conekta/route.ts
+────────────────────────────────
+5a. GET /api/scanner/events
+────────────────────────────────
+Returns the organizer's live and upcoming events. Scanner picks one to work.
 
-Leave for a future cleanup pass:
-  profiles.conekta_customer_id column + type reference — dropping a column is
-  destructive and not urgent since it's null everywhere. Schedule it alongside
-  any other schema cleanup.
+  // app/api/scanner/events/route.ts
+  import { NextRequest, NextResponse } from 'next/server';
+  import { cookies } from 'next/headers';
+  import { createServiceClient } from '@/lib/supabase/server';
+  import { verifyScannerToken } from '@/lib/scanner/jwt';
+  import { SCANNER_COOKIE } from '@/lib/scanner/cookies';
 
-  events.conekta_product_id column + type reference — same reason.
+  export async function GET(req: NextRequest) {
+    const token = cookies().get(SCANNER_COOKIE)?.value;
+    const payload = token ? await verifyScannerToken(token) : null;
+    if (!payload) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const supabase = createServiceClient();
+
+    const { data: events } = await supabase
+      .from('events')
+      .select('id, title, date, venue, tickets_sold, capacity')
+      .eq('organizer_id', payload.organizer_id)
+      .in('status', ['live'])
+      .order('date', { ascending: true });
+
+    return NextResponse.json({ events: events ?? [] });
+  }
+
+Why only 'live' events?
+  'draft' events aren't public yet — no tickets have been sold. 'closed',
+  'cancelled', and 'finalizado' events are in the past. Door staff only need
+  to see events they could be working right now.
+
+────────────────────────────────
+5b. GET /api/scanner/[eventId]/guests
+────────────────────────────────
+Full guest list for an event with real-time scan status.
+
+  // app/api/scanner/[eventId]/guests/route.ts
+  import { NextRequest, NextResponse } from 'next/server';
+  import { cookies } from 'next/headers';
+  import { createServiceClient } from '@/lib/supabase/server';
+  import { verifyScannerToken } from '@/lib/scanner/jwt';
+  import { SCANNER_COOKIE } from '@/lib/scanner/cookies';
+
+  export async function GET(
+    req: NextRequest,
+    { params }: { params: { eventId: string } }
+  ) {
+    const token = cookies().get(SCANNER_COOKIE)?.value;
+    const payload = token ? await verifyScannerToken(token) : null;
+    if (!payload) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const supabase = createServiceClient();
+
+    // Verify this event belongs to the scanner's organizer
+    const { data: event } = await supabase
+      .from('events')
+      .select('id, organizer_id, title, capacity')
+      .eq('id', params.eventId)
+      .eq('organizer_id', payload.organizer_id)
+      .single();
+
+    if (!event) return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+
+    const { data: tickets } = await supabase
+      .from('tickets')
+      .select('id, holder_name, ticket_type, status, redeemed_at')
+      .eq('event_id', params.eventId)
+      .in('status', ['active', 'redeemed'])
+      .order('holder_name', { ascending: true });
+
+    const total    = tickets?.length ?? 0;
+    const scanned  = tickets?.filter(t => t.status === 'redeemed').length ?? 0;
+
+    return NextResponse.json({
+      event: { id: event.id, title: event.title, capacity: event.capacity },
+      summary: { total, scanned, remaining: total - scanned },
+      tickets: tickets ?? [],
+    });
+  }
+
+Why verify event.organizer_id === payload.organizer_id?
+  Defense in depth. Without this check, a compromised scanner token could
+  request guest lists for events belonging to other organizers. The check
+  ensures a scanner can only access data for their own organizer's events,
+  even if the JWT is stolen.
+
+Why filter status IN ('active', 'redeemed') and not just all tickets?
+  'cancelled' and 'transferred' tickets should not appear on the guest list —
+  they're no longer valid. Only active (not yet scanned) and redeemed (already
+  scanned) tickets represent real attendees.
 
 
 ================================================================================
-KNOWN GAPS (out of scope for Task #11)
+PHASE 6 — MIDDLEWARE UPDATES
 ================================================================================
-1. release_inventory and ticket_type_configs.tickets_sold:
-   handlePaymentFailed calls release_inventory, which decrements events.tickets_sold.
-   But if the order had a ticket_type_config_id, ticket_type_configs.tickets_sold
-   was also incremented by reserve_tickets. The current release_inventory SQL needs
-   to be verified/updated to also decrement ticket_type_configs.tickets_sold.
-   Check the SQL function before shipping.
 
-2. Webhook retries and partial failure:
-   If ticket insert succeeds but email sending fails, the webhook returns 200 and
-   Stripe won't retry. The tickets exist but no email was sent. Consider wrapping
-   the email loop in a try/catch that logs failures separately rather than silently
-   dropping them. A retry queue (or just a cron job that finds tickets with
-   email_sent_at = null) is the robust fix.
+Update the existing middleware.ts (or create it if it doesn't exist).
+The middleware handles THREE distinct concerns:
 
-3. 3D Secure / authentication flows:
-   PaymentElement handles 3D Secure automatically on the client side. No extra
-   server-side work needed. But test it with card 4000 0025 0000 3155 to confirm
-   the return_url flow works correctly after the authentication redirect.
+  1. Subdomain detection — am I on scan.boleteo.com?
+  2. Mobile enforcement — is this a mobile browser?
+  3. Scanner JWT validation — is the scanner logged in?
 
-4. Chargebacks and refunds:
-   When a buyer disputes a charge, Stripe fires `charge.dispute.created`. When a
-   refund is issued, `charge.refunded` fires. Neither is handled in this plan.
-   For now, manage disputes and refunds directly in the Stripe dashboard. Add
-   webhook handlers when the volume justifies it.
+  // middleware.ts
+  import { NextRequest, NextResponse } from 'next/server';
+  import { verifyScannerToken } from '@/lib/scanner/jwt';
+  import { SCANNER_COOKIE } from '@/lib/scanner/cookies';
 
-5. Free events:
-   Events with price_mxn = 0 should bypass Stripe entirely — create tickets
-   directly without a PaymentIntent. The current checkout/route.ts doesn't have
-   this branch. Add it: if totalCentavos === 0, skip PaymentIntent creation,
-   create tickets directly, mark order paid, return { orderId }.
+  const MOBILE_REGEX = /Android|iPhone|iPad|iPod|Mobile/i;
+  const SCANNER_HOST = 'scan.boleteo.com';
 
-6. Historical orders (pre-Stripe):
-   Existing orders have conekta_order_id values (or nulls). After the column
-   rename to stripe_payment_intent_id, those historical orders will have null in
-   the new column — correct, since they were never processed through Stripe.
-   No data migration needed.
+  export async function middleware(req: NextRequest) {
+    const host      = req.nextUrl.hostname;
+    const pathname  = req.nextUrl.pathname;
+    const ua        = req.headers.get('user-agent') ?? '';
+    const isMobile  = MOBILE_REGEX.test(ua);
+    const isScanner = host === SCANNER_HOST || host === 'scan.localhost';
+
+    // ── Scanner subdomain ──────────────────────────────────────────────────
+    if (isScanner) {
+      // Mobile check first
+      if (!isMobile && pathname !== '/scan/desktop-only') {
+        return NextResponse.redirect(new URL('/scan/desktop-only', req.url));
+      }
+
+      // Let login and desktop-only pages through unauthenticated
+      if (pathname === '/scan/login' || pathname === '/scan/desktop-only') {
+        return NextResponse.next();
+      }
+
+      // All other scanner routes require a valid JWT
+      const token   = req.cookies.get(SCANNER_COOKIE)?.value;
+      const payload = token ? await verifyScannerToken(token) : null;
+
+      if (!payload) {
+        return NextResponse.redirect(new URL('/scan/login', req.url));
+      }
+
+      return NextResponse.next();
+    }
+
+    // ── Main domain — block /scan/* routes ────────────────────────────────
+    if (pathname.startsWith('/scan/')) {
+      return NextResponse.redirect(new URL('/', req.url));
+    }
+
+    // ── Existing main-domain middleware logic (Supabase auth, etc.) ────────
+    // ... your existing middleware code here ...
+
+    return NextResponse.next();
+  }
+
+  export const config = {
+    matcher: [
+      '/((?!_next/static|_next/image|favicon.ico).*)',
+    ],
+  };
+
+Local development note on subdomains:
+  `scan.localhost` resolves to 127.0.0.1 in most browsers without any host
+  file changes. Test locally by visiting http://scan.localhost:3000/scan/login.
+  If the browser doesn't resolve scan.localhost, add to /etc/hosts (Mac/Linux)
+  or C:\Windows\System32\drivers\etc\hosts (Windows):
+    127.0.0.1 scan.localhost
+
+  The middleware checks for both 'scan.boleteo.com' (production) and
+  'scan.localhost' (development) — remove 'scan.localhost' before launch.
+
+Why read User-Agent in middleware (not in the page)?
+  If the check is in the page, the desktop user loads the full page bundle,
+  React hydrates, then a redirect fires. That's a flash of wrong content.
+  Middleware runs on the edge before any content is served — the redirect
+  is instant and no scanner UI code is ever delivered to a desktop browser.
+
+Why is verifyScannerToken async in middleware?
+  jose's jwtVerify is async (it uses the Web Crypto API, which is async
+  by spec). This is fine — Next.js middleware supports async functions.
+
+
+================================================================================
+PHASE 7 — SCANNER UI PAGES
+================================================================================
+
+All pages live under app/(scanner)/scan/.
+The (scanner) route group has no layout file — scanner pages are standalone,
+full-screen mobile UI with no nav bar or organizer chrome.
+
+────────────────────────────────
+7a. app/(scanner)/scan/login/page.tsx
+────────────────────────────────
+Simple mobile-first login form. No Supabase client needed — auth is handled
+by the POST /api/scanner/login API route which sets the cookie server-side.
+
+UI:
+  - Boleteo logo or wordmark (small, top-center)
+  - Username input (autocomplete="username")
+  - Password input (autocomplete="current-password", type="password")
+  - "Iniciar sesión" button
+  - Error message below button on 401
+
+On submit:
+  POST /api/scanner/login → { ok: true }
+  → router.push('/scan/events')
+
+On error: show "Credenciales incorrectas"
+
+Styling: full-screen dark background (#0f0f0f), white inputs, indigo button.
+Mobile form should fill the screen vertically with centered content.
+Font size ≥ 16px on all inputs (prevents iOS auto-zoom on focus).
+
+────────────────────────────────
+7b. app/(scanner)/scan/desktop-only/page.tsx
+────────────────────────────────
+Static page, no auth required.
+
+UI:
+  - Phone icon (large, centered)
+  - "Esta herramienta es solo para móvil"
+  - "Abre este enlace en tu teléfono para continuar"
+  - Display the URL prominently so staff can type it on their phone
+
+────────────────────────────────
+7c. app/(scanner)/scan/events/page.tsx
+────────────────────────────────
+Client component. Fetches GET /api/scanner/events on mount.
+
+UI:
+  - "Selecciona tu evento" header
+  - List of event cards: title, date, venue
+  - Tap a card → navigate to /scan/[eventId]
+  - If no live events: "No hay eventos activos en este momento"
+  - Logout button (top-right): POST /api/scanner/logout → router.push('/scan/login')
+
+────────────────────────────────
+7d. app/(scanner)/scan/[eventId]/page.tsx
+────────────────────────────────
+The main scanner UI. Two tabs: Dashboard and Camera.
+Client component with tab state.
+
+STATE:
+  const [tab, setTab]           = useState<'dashboard' | 'camera'>('dashboard');
+  const [guests, setGuests]     = useState<GuestData | null>(null);
+  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+
+POLLING:
+  useEffect — on mount and every 10 seconds, call GET /api/scanner/[eventId]/guests
+  and update guests state. Stop polling when tab = 'camera' (no need to fetch
+  while scanning). Resume when tab switches back to 'dashboard'.
+
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  useEffect(() => {
+    if (tab !== 'dashboard') { clearInterval(intervalRef.current!); return; }
+    const fetch = () => { /* call guests endpoint, setGuests */ };
+    fetch();
+    intervalRef.current = setInterval(fetch, 10_000);
+    return () => clearInterval(intervalRef.current!);
+  }, [tab, eventId]);
+
+────────────────
+TAB: DASHBOARD
+────────────────
+Layout (full-screen mobile):
+  1. Event title (top, small text)
+  2. Pie chart — scanned (green #22c55e) vs remaining (grey #e5e7eb)
+     Use a simple SVG donut chart — no chart library needed.
+     Center text: "X / Y" (scanned / total)
+  3. Guest list — scrollable
+     Each row:
+       ● Green dot if status='redeemed', grey dot if 'active'
+       Holder name (bold)
+       Ticket type (small, grey)
+       Redeemed time if scanned (xs, grey)
+     Sort: redeemed first (most recent at top), then active alphabetically
+
+Simple SVG donut chart pattern:
+  radius=45, strokeWidth=10, circumference = 2π × 45 ≈ 283
+  scanned arc = (scanned/total) × 283
+  Set strokeDasharray={`${scannedArc} ${circumference}`}
+  Two <circle> elements — one for full grey ring, one for green progress arc
+
+────────────────
+TAB: CAMERA
+────────────────
+Uses html5-qrcode to open the device camera and decode QR codes.
+
+IMPORTANT: html5-qrcode manipulates the DOM directly and is not a React
+component. Use it inside a useEffect with a cleanup function:
+
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+
+  useEffect(() => {
+    if (tab !== 'camera') return;
+
+    const qr = new Html5Qrcode('qr-reader');
+    scannerRef.current = qr;
+
+    qr.start(
+      { facingMode: 'environment' },  // back camera
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      async (decodedText) => {
+        // decodedText is the ticket UUID
+        await qr.stop();
+        await handleScan(decodedText);
+      },
+      undefined // error callback — ignore decode misses
+    );
+
+    return () => {
+      qr.stop().catch(() => {});
+    };
+  }, [tab]);
+
+  async function handleScan(ticketId: string) {
+    const res = await fetch(`/api/tickets/${ticketId}/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scanned_by: 'scanner' }),
+    });
+    const data = await res.json();
+    setScanResult(data);   // show result overlay
+  }
+
+SCAN RESULT OVERLAY:
+After scanning, show a full-screen overlay for 3 seconds then auto-dismiss
+and restart the camera:
+
+  SUCCESS (status: 'redeemed', first time):
+    Green background, large ✓, holder name, ticket type
+
+  ALREADY SCANNED:
+    Yellow/orange background, ⚠ icon, "Ya fue escaneado",
+    time it was first scanned
+
+  INVALID / NOT FOUND:
+    Red background, ✗ icon, "QR inválido"
+
+  WRONG EVENT:
+    Red background, ✗ icon, "Boleto de otro evento"
+
+After 3 seconds (or on tap), dismiss overlay and restart camera automatically.
+
+  useEffect(() => {
+    if (!scanResult) return;
+    const timer = setTimeout(() => {
+      setScanResult(null);
+      // restart camera by re-running the qr.start() logic
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [scanResult]);
+
+The existing /api/tickets/[id]/validate route already returns the reason
+for failure (not_found, wrong_event, already_redeemed, etc.) — use that
+to drive the overlay content.
+
+CAMERA PERMISSION ON iOS:
+  getUserMedia (which html5-qrcode uses internally) requires HTTPS on iOS Safari.
+  In production this is automatic (Vercel = HTTPS). In local dev on a real phone,
+  use ngrok to get an HTTPS tunnel:
+    ngrok http 3000
+  Then visit the ngrok HTTPS URL on your phone.
+
+TAB SWITCHER (bottom of screen):
+  Fixed at bottom, two buttons: 📊 Dashboard | 📷 Cámara
+  Active tab: indigo underline or filled button
+  Switching from camera to dashboard stops the camera (cleanup in useEffect)
+
+
+================================================================================
+PHASE 8 — ORGANIZER SCANNER MANAGEMENT
+================================================================================
+
+Organizers manage scanner accounts from their main dashboard.
+New section: "Escáneres" (separate page or tab under /dashboard/scanners).
+
+────────────────────────────────
+8a. API routes (main domain, Supabase auth)
+────────────────────────────────
+
+These routes use the regular Supabase auth (organizer session), not the
+scanner JWT. All four are under /api/organizer/scanners/.
+
+GET /api/organizer/scanners
+  Returns list of scanner accounts for the logged-in organizer.
+  SELECT id, username, created_at (NEVER password_hash).
+
+POST /api/organizer/scanners
+  Body: { username: string, password: string }
+  Validate: username 3–30 chars, alphanumeric + underscores only.
+  Validate: password minimum 8 chars.
+  Hash password with hashPassword(), insert row.
+  Return: { id, username, created_at }
+  Error on UNIQUE violation: "Ya existe un escáner con ese nombre"
+
+PATCH /api/organizer/scanners/[id]
+  Body: { password: string }
+  Hash new password, update password_hash where id = [id] AND organizer_id = user.id.
+  The organizer_id check prevents an organizer from changing another's scanner password.
+  Return: { ok: true }
+
+DELETE /api/organizer/scanners/[id]
+  Delete where id = [id] AND organizer_id = user.id.
+  Return: { ok: true }
+
+────────────────────────────────
+8b. Dashboard UI — app/(organizer)/dashboard/scanners/page.tsx
+────────────────────────────────
+Client component. Fetches scanner list on mount.
+
+UI sections:
+  1. "Escáneres" header + "Nuevo escáner" button (opens inline form)
+
+  2. Create form (shown when button clicked):
+     - Username input (with validation hint: "Solo letras, números y _")
+     - Password input
+     - Confirm password input
+     - "Crear" button
+     - Cancel link
+
+  3. Scanner account list:
+     Each row:
+       - Username (bold)
+       - Created date (small grey)
+       - "Cambiar contraseña" button → inline password form
+       - "Eliminar" button → confirm dialog → DELETE
+
+  4. Empty state: "Aún no tienes escáneres. Crea uno para que tu equipo pueda
+     escanear boletos en la entrada."
+
+  5. Info box at bottom:
+     "Tus escáneres inician sesión en scan.boleteo.com con su usuario y contraseña.
+      Solo tienen acceso al panel de escaneo — no pueden ver tu cuenta ni tus datos."
+
+Password validation (client-side):
+  - Minimum 8 characters
+  - "Crear" button disabled until both password fields match
+  - Show mismatch error inline if they type in confirm field and they don't match
+
+
+================================================================================
+PHASE 9 — VERCEL SUBDOMAIN CONFIGURATION
+================================================================================
+This phase is infrastructure, not code. Do it after all code is deployed.
+
+In Vercel project settings → Domains:
+  Add domain: scan.boleteo.com
+  This creates a CNAME record pointing scan.boleteo.com to your Vercel deployment.
+  The same Next.js app serves both boleteo.com and scan.boleteo.com.
+  Middleware handles the routing split.
+
+In your DNS provider (wherever boleteo.com is registered):
+  Add CNAME record:
+    Name: scan
+    Value: cname.vercel-dns.com (or whatever Vercel specifies)
+    TTL: 3600
+
+SSL:
+  Vercel automatically provisions an SSL certificate for scan.boleteo.com
+  via Let's Encrypt. No manual SSL setup needed.
+
+Testing before DNS propagates:
+  Deploy the code first. Test via the Vercel preview URL (e.g., your-app.vercel.app).
+  Middleware hostname check won't match in preview — temporarily add the preview
+  hostname to the isScanner check, or test subdomain logic locally with scan.localhost.
+
+
+================================================================================
+PHASE 10 — TESTING CHECKLIST
+================================================================================
+
+────────────────────────────────
+Auth flow
+────────────────────────────────
+□ Organizer creates a scanner account from /dashboard/scanners
+□ scanner_accounts row appears in Supabase with hashed (not plaintext) password
+□ Scanner logs in at scan.localhost:3000/scan/login with correct credentials → cookie set
+□ Wrong password → "Credenciales incorrectas", no cookie
+□ After login, visiting /scan/login redirects to /scan/events (not shown — handle in middleware or page)
+□ Logout clears cookie, redirects to /scan/login
+□ After logout, visiting /scan/events redirects to /scan/login
+□ JWT expiry: manually set EXPIRY to '10s', log in, wait 11s, confirm redirect to login
+
+────────────────────────────────
+Mobile enforcement
+────────────────────────────────
+□ Visit scan.localhost:3000 in desktop Chrome → redirect to /scan/desktop-only
+□ Visit in Chrome DevTools mobile mode → login page loads
+□ On real phone → login page loads
+
+────────────────────────────────
+Scanner data
+────────────────────────────────
+□ Events list shows only organizer's live events, ordered by date
+□ Scanner for Organizer A cannot access events for Organizer B
+  (test by decoding JWT, manually requesting /api/scanner/[other-event-id]/guests)
+□ Guest list shows all active + redeemed tickets for the event
+□ Guest list excludes cancelled tickets
+□ Summary counts (total, scanned, remaining) are correct
+
+────────────────────────────────
+Dashboard UI
+────────────────────────────────
+□ Pie chart renders correctly at 0% scanned (all grey)
+□ Pie chart renders correctly at 100% scanned (all green)
+□ Guest list updates within 10 seconds of a ticket being scanned
+□ Scanned tickets show at the top with redeemed time
+□ Event title visible at top of dashboard
+
+────────────────────────────────
+Camera / QR scanning
+────────────────────────────────
+□ Camera opens on tab switch (browser prompts for permission on first use)
+□ Pointing camera at a valid QR code triggers the scan handler
+□ Valid ticket → green overlay with holder name
+□ Already scanned ticket → orange overlay with original scan time
+□ Invalid QR (random string, wrong format) → red overlay
+□ After 3 seconds, overlay dismisses and camera restarts
+□ Switching back to Dashboard tab stops the camera (no media stream leak)
+
+────────────────────────────────
+Organizer management
+────────────────────────────────
+□ Create scanner account → appears in list
+□ Duplicate username → error message (unique constraint)
+□ Change password → old password no longer works, new password works
+□ Delete scanner account → removed from list, login with those credentials fails
+□ Organizer A cannot delete Organizer B's scanner account
+  (test by calling DELETE /api/organizer/scanners/[b-scanner-id] as Organizer A)
+
+
+================================================================================
+KNOWN GAPS / FUTURE WORK
+================================================================================
+
+1. Scanner account lockout after N failed attempts
+   Currently there is no brute-force protection beyond bcrypt's slow hashing.
+   For production add a rate limiter on POST /api/scanner/login (e.g., max 5
+   attempts per IP per 15 minutes). Use Vercel's KV store or an in-memory
+   map with a TTL to track attempts.
+
+2. Real-time guest list updates (Supabase Realtime)
+   The current design polls every 10 seconds. For large events where multiple
+   doors are scanning simultaneously, Supabase Realtime (subscribe to ticket
+   updates for the event) would push updates instantly. Polling is acceptable
+   for V1 — add Realtime as an optimization later.
+
+3. Offline support
+   If the venue has poor cellular coverage, scans will fail (no network).
+   A future enhancement: cache the guest list in memory/localStorage at session
+   start, allow offline validation against cached data, sync when connectivity
+   returns. Significant complexity — defer until there's a real use case.
+
+4. Multi-door support
+   All scanner accounts for an event see the same global scan state. If two
+   doors are scanning and person A is scanned at door 1, door 2's guest list
+   will show them as scanned after the next poll. This is correct behavior —
+   no per-door tracking needed unless the organizer specifically requests it.
+
+5. Scan audit log
+   The tickets table already records redeemed_by and redeemed_at. The current
+   validate route sets redeemed_by to the string 'scanner'. When scanner
+   accounts are active, pass the scanner account username or ID instead so
+   you can see which door scanned each ticket.
+
+6. Free event support
+   The scanner panel works for paid events. Free events (no Stripe, no orders)
+   also create tickets — the scanner should work identically since it reads
+   from the tickets table directly, not orders.

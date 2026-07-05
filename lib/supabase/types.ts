@@ -129,6 +129,14 @@ export type CheckoutSession = {
   created_at: string;
 };
 
+export type ScannerAccount = {
+  id: string;
+  organizer_id: string;
+  username: string;
+  password_hash: string;
+  created_at: string;
+}
+
 export type TicketInsert = {
   id?: string,
   ticket_type_config_id: string | null;
@@ -198,6 +206,12 @@ export type Database = {
         Update: Partial<Pick<CheckoutSession, 'used'>>;
         Relationships: [];
       };
+      scanner_accounts: {
+        Row: ScannerAccount;
+        Insert: Omit<ScannerAccount, 'id' | 'created_at'>;
+        Update: Partial<Pick<ScannerAccount, 'password_hash'>>;
+        Relationships: [];
+      }
     };
     Views: Record<string, never>;
     Functions: {

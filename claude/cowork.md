@@ -44,11 +44,11 @@ Ticket sales platform (boletería) for the Mexican market.
 | 9 | ✅ Done | Bound buyer quantity by session.max_quantity + event.max_tickets_per_order. Flow 2 (standalone link) first, Flow 1 (API/embedded) is groundwork only. Tests written (14 cases across 2 files). One known edge case open — see Bug #9 note below |
 | 10 | ✅ Done | Implement ticket_phases validation at checkout |
 | 11 | ✅ Done | Stripe integration: Connect Express, PaymentIntents, webhook fulfillment, organizer onboarding, in-site earnings dashboard. Full flow tested and working end-to-end. |
-| 12 | 🔴 Pending | Abandoned PaymentIntent inventory leak — add `payment_intent.canceled` webhook handler + cron job at `app/api/cron/expire-orders/route.ts` + `vercel.json`. Cron cancels stale pending orders (>30 min), triggering the webhook to release inventory. Needs `CRON_SECRET` env var. |
-| 13 | 🔴 Pending | `tickets_sold` inflation — counter increments on reservation not payment. Resolves automatically once Task #12 is done (canceled PIs → `release_inventory` decrements counter). Existing stuck orders need a one-time SQL cleanup. |
-| 14 | 🔴 Pending | Resend verified domain — currently using `onboarding@resend.dev` (sandbox sender). Works only because buyer email = Resend account owner email during testing. Must switch to `tickets@<domain>` before real buyers. Blocked on domain purchase. |
-| 15 | 🔴 Pending | Conekta dead code cleanup — delete `lib/conekta/client.ts`, `lib/conekta/webhook.ts`, `app/api/webhooks/conekta/route.ts`, stale comment on line 8 of `app/api/checkout/route.ts`. |
-| 16 | 🔴 Pending | Build check-in session system (scanner auth) — same as Task #4 above, still pending. |
+| 12 | ✅ Done | Abandoned PaymentIntent inventory leak — `payment_intent.canceled` webhook handler + cron job at `app/api/cron/expire-orders/route.ts` + `vercel.json`. Cron cancels stale pending orders (>30 min), triggering the webhook to release inventory. |
+| 13 | ✅ Done | `tickets_sold` inflation — resolved via Task #12 (canceled PIs → `release_inventory` decrements counter). Existing stuck orders cleaned up via SQL. |
+| 14 | 🔴 Pending | Resend verified domain — currently using `onboarding@resend.dev` (sandbox sender). Must switch to `tickets@<domain>` before real buyers. Blocked on domain purchase. |
+| 15 | ✅ Done | Conekta dead code cleanup — deleted `lib/conekta/client.ts`, `lib/conekta/webhook.ts`, `app/api/webhooks/conekta/route.ts`, stale comment on line 8 of `app/api/checkout/route.ts`. |
+| 16 | 🔴 Pending | Build check-in session system (scanner auth) — door staff scanner auth, event-scoped session links. Same as old Task #4. |
 
 ---
 
@@ -144,4 +144,4 @@ if (account.charges_enabled && account.payouts_enabled) {
 
 ## Next Up
 
-Task #11 (Stripe) fully working end-to-end — payments, webhooks, ticket emails with QR, confirmation page polling, earnings dashboard. Next priorities: **Task #12** (abandoned PI inventory leak + cron), then **Task #13** (`tickets_sold` fix), then **Task #15** (Conekta cleanup). Task #4 (check-in sessions) is the next major feature after that.
+Tasks #11–13, #15 done. Next: **Task #14** (Resend verified domain, blocked on domain purchase), then **Task #16** (check-in session system — the next major feature).

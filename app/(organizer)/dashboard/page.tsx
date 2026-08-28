@@ -9,7 +9,6 @@ export default async function DashboardPage() {
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) redirect('/login');
-  // user is non-null past this point; redirect() throws so TS needs the assertion
   const uid = user!.id;
 
   // Auto-finalize events whose end_time (or date) has passed
@@ -28,88 +27,94 @@ export default async function DashboardPage() {
     .order('date', { ascending: false });
 
   const statusColors: Record<string, string> = {
-    draft:      'bg-gray-100 text-gray-700',
-    live:       'bg-green-100 text-green-700',
-    closed:     'bg-yellow-100 text-yellow-700',
-    cancelled:  'bg-red-100 text-red-700',
-    finalizado: 'bg-blue-100 text-blue-700',
+    draft:      'bg-gray-800 text-gray-400',
+    live:       'bg-emerald-900/50 text-emerald-400',
+    closed:     'bg-amber-900/50 text-amber-400',
+    cancelled:  'bg-red-900/50 text-red-400',
+    finalizado: 'bg-indigo-900/50 text-indigo-400',
   };
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-8">
-      <div className="flex items-center justify-between mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Mis eventos</h1>
-        <div className="flex items-center gap-4">
-          <Link href="/dashboard/earnings" className="text-sm text-gray-500 hover:text-gray-900">
-            Mis ingresos
+    <div className="min-h-screen bg-gray-950 text-white">
+      {/* Nav */}
+      <nav className="flex items-center justify-between px-6 md:px-12 py-5 max-w-7xl mx-auto border-b border-gray-800">
+        <Link href="/" className="text-lg font-bold tracking-tight">Climate Control</Link>
+        <div className="flex items-center gap-5">
+          <Link href="/dashboard/earnings" className="text-sm text-gray-400 hover:text-white transition-colors">
+            Ingresos
           </Link>
-          <Link href="/dashboard/scanners" className="text-sm text-gray-500 hover:text-gray-900">
+          <Link href="/dashboard/scanners" className="text-sm text-gray-400 hover:text-white transition-colors">
             Escáneres
           </Link>
           <LogoutButton />
+        </div>
+      </nav>
+
+      <div className="max-w-7xl mx-auto px-6 md:px-12 py-10">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-8">
+          <h1 className="text-2xl font-bold">Mis eventos</h1>
           <Link
             href="/dashboard/events/new"
-            className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700"
+            className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-700 transition-colors"
           >
             + Nuevo evento
           </Link>
         </div>
-      </div>
 
-      {!events?.length ? (
-        <div className="text-center py-16 text-gray-500">
-          <p className="text-lg mb-2">Aún no tienes eventos.</p>
-          <Link href="/dashboard/events/new" className="text-indigo-600 hover:underline text-sm">
-            Crea tu primer evento →
-          </Link>
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="border-b border-gray-200 text-left">
-                <th className="pb-3 font-semibold text-gray-600">Evento</th>
-                <th className="pb-3 font-semibold text-gray-600">Fecha</th>
-                <th className="pb-3 font-semibold text-gray-600 text-right">Vendidos / Cap.</th>
-                <th className="pb-3 font-semibold text-gray-600 text-right">Precio</th>
-                <th className="pb-3 font-semibold text-gray-600">Estado</th>
-                <th className="pb-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map((event) => (
-                <tr key={event.id} className="border-b border-gray-100 hover:bg-gray-50">
-                  <td className="py-3 font-medium text-gray-900">{event.title}</td>
-                  <td className="py-3 text-gray-600">{formatDate(event.date)}</td>
-                  <td className="py-3 text-right text-gray-700">
-                    {event.tickets_sold} / {event.capacity}
-                  </td>
-                  <td className="py-3 text-right text-gray-700">{formatMXN(event.price_mxn)}</td>
-                  <td className="py-3">
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${statusColors[event.status]}`}>
-                      {event.status}
-                    </span>
-                  </td>
-                  <td className="py-3 text-right">
-                    <Link
-                      href={`/dashboard/events/${event.id}`}
-                      className="text-indigo-600 hover:underline text-xs mr-3"
-                    >
-                      Ver
-                    </Link>
-                    <Link
-                      href={`/dashboard/events/${event.id}/edit`}
-                      className="text-gray-500 hover:underline text-xs"
-                    >
-                      Editar
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+        {/* Content */}
+        {!events?.length ? (
+          <div className="text-center py-20 border border-dashed border-gray-800 rounded-2xl">
+            <p className="text-gray-400 text-lg mb-3">Aún no tienes eventos.</p>
+            <Link
+              href="/dashboard/events/new"
+              className="text-indigo-400 hover:text-indigo-300 text-sm transition-colors"
+            >
+              Crea tu primer evento →
+            </Link>
+          </div>
+        ) : (
+          <div className="grid gap-4">
+            {events.map((event) => (
+              <Link
+                key={event.id}
+                href={`/dashboard/events/${event.id}`}
+                className="bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-colors group"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-3 mb-1.5">
+                      <h2 className="text-white font-semibold truncate group-hover:text-indigo-400 transition-colors">
+                        {event.title}
+                      </h2>
+                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${statusColors[event.status]}`}>
+                        {event.status}
+                      </span>
+                    </div>
+                    <p className="text-gray-500 text-sm">
+                      {formatDate(event.date)} · {event.venue}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-8 flex-shrink-0 ml-6">
+                    <div className="text-right">
+                      <p className="text-white text-sm font-medium">{event.tickets_sold} / {event.capacity}</p>
+                      <p className="text-gray-600 text-xs">vendidos</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-white text-sm font-medium">{formatMXN(event.price_mxn)}</p>
+                      <p className="text-gray-600 text-xs">precio</p>
+                    </div>
+                    <svg className="w-5 h-5 text-gray-600 group-hover:text-gray-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

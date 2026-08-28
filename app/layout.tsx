@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
 
 export const metadata: Metadata = {
-  title: 'Boletera',
+  title: 'Climate Control',
   description: 'Plataforma de boletos para eventos en México',
 };
 

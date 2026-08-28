@@ -107,7 +107,7 @@ export default function ScannerEventPage() {
         showFlash({
           color: 'red',
           label: res.status === 401 ? 'Sesión expirada' : 'Error',
-          sublabel: data.error ?? `HTTP ${res.status}`,
+          sublabel: `${data.error ?? `HTTP ${res.status}`} [${ticketId.slice(0, 20)}]`,
         });
         return;
       }

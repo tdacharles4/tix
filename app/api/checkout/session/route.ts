@@ -36,7 +36,9 @@ export async function POST(req: NextRequest) {
       .insert({
         event_id:              eventId,
         ticket_type_config_id: ticketTypeConfigId ?? null,
-        max_quantity:              Number(quantity),
+        max_quantity:          Number(quantity),
+        expires_at:            new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+        used:                  false,
       })
       .select()
       .single();

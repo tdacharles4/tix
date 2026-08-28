@@ -76,10 +76,7 @@ export async function middleware(req:NextRequest){
 
   if (isProtected(pathname)) {
     if (!user) {
-      const loginUrl = req.nextUrl.clone();
-      loginUrl.pathname = '/login';
-      loginUrl.searchParams.set('redirectTo', pathname);
-      return NextResponse.redirect(loginUrl);
+      return NextResponse.redirect(new URL('/', req.url));
     }
 
     const { data: profile } = await supabase

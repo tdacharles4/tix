@@ -4,11 +4,13 @@ import { createClient } from "@/lib/supabase/client";
 
 export default function LandingPage() {
   async function handleGoogleLogin() {
+    const params = new URLSearchParams(window.location.search);
+    const next = params.get('redirectTo') ?? '/dashboard';
     const supabase = createClient();
     supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
+        redirectTo: `${window.location.origin}/auth/callback?next=${next}`,
       },
     });
   }

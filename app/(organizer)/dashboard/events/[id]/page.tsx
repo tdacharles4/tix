@@ -111,7 +111,7 @@ export default async function OrganizerEventPage({ params }: Props) {
         tickets={tickets ?? []}
         orderMap={orderMap}
         statusColors={statusColors}
-        phases={(phasesData ?? []) as PhaseWithTypes[]}
+        phases={(phasesData ?? []) as unknown as PhaseWithTypes[]}
       />
     </div>
   );

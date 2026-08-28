@@ -102,6 +102,16 @@ export default function ScannerEventPage() {
       });
       const data = await res.json();
 
+      // API-level errors (401, 404, 500) — surface the message
+      if (!res.ok) {
+        showFlash({
+          color: 'red',
+          label: res.status === 401 ? 'Sesión expirada' : 'Error',
+          sublabel: data.error ?? `HTTP ${res.status}`,
+        });
+        return;
+      }
+
       if (data.valid) {
         const ticket = data.ticket as Record<string, unknown>;
         showFlash({
@@ -109,7 +119,6 @@ export default function ScannerEventPage() {
           label: (ticket.holder_name as string) ?? 'Titular',
           sublabel: (ticket.ticket_type as string) ?? '',
         });
-        // Refresh guest data
         fetchGuests();
       } else {
         const reason = data.reason as string;
@@ -117,6 +126,10 @@ export default function ScannerEventPage() {
         showFlash({
           color: isAlready ? 'amber' : 'red',
           label: isAlready ? 'Ya escaneado' : reason === 'wrong_event' ? 'Otro evento' : 'No válido',
+          sublabel: reason === 'not_found' ? 'Boleto no encontrado'
+            : reason === 'cancelled' ? 'Boleto cancelado'
+            : reason === 'transferred' ? 'Boleto transferido'
+            : undefined,
         });
       }
     } catch {

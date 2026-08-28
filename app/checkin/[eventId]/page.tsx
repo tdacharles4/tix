@@ -54,6 +54,7 @@ function CheckinScanner() {
   const processingRef = useRef(false);
 
   const reasonLabels: Record<string, string> = {
+    redeemed: 'Ya fue canjeado',
     already_redeemed: 'Ya fue canjeado',
     cancelled: 'Boleto cancelado',
     transferred: 'Boleto transferido',
@@ -84,7 +85,7 @@ function CheckinScanner() {
       const type = String((result.ticket as Record<string, unknown>).ticket_type ?? '');
       setFlash({ color: 'green', label: name, sublabel: type });
     } else {
-      const isAlready = result.reason === 'already_redeemed';
+      const isAlready = result.reason === 'redeemed' || result.reason === 'already_redeemed';
       setFlash({
         color: isAlready ? 'amber' : 'red',
         label: isAlready ? 'Ya escaneado' : 'No válido',
@@ -120,7 +121,11 @@ function CheckinScanner() {
             body: JSON.stringify({ eventId }),
           });
           const data = await res.json();
-          showFlash(data);
+          if (!res.ok) {
+            showFlash({ valid: false, reason: res.status === 401 ? 'No autenticado' : (data.error ?? `Error ${res.status}`) });
+          } else {
+            showFlash(data);
+          }
         } catch {
           showFlash({ valid: false, reason: 'Error de conexión' });
         }

@@ -16,7 +16,7 @@ export async function validateAndRedeemTicket(
     p_event_id: eventId,
     p_scanned_by: redeemedBy,
   });
-  if (error) throw error;
+  if (error) throw new Error(error.message ?? JSON.stringify(error));
   const redeemed = rows?.[0];
 
   if (redeemed) {

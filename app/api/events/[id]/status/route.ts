@@ -11,7 +11,7 @@ type RouteContext = { params: Promise<{ id: string }> };
 
 export async function PATCH(req: NextRequest, ctx: RouteContext) {
   const { id } = await ctx.params;
-  const { status } = await req.json();
+  const { status } = (await req.json()) as { status: Event['status'] };
 
   if (!status || typeof status !== 'string') {
     return NextResponse.json({ error: 'Missing status' }, { status: 400 });

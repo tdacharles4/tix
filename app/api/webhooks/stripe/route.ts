@@ -4,6 +4,7 @@ import { stripe } from '@/lib/stripe/client';
 import { createServiceClient } from '@/lib/supabase/server';
 import { generateQRCode } from '@/lib/qr/generate';
 import { signTicket } from '@/lib/qr/sign';
+import { generateTicketPDF } from '@/lib/tickets/generate-pdf';
 import { resend } from '@/lib/resend/client';
 import { TicketEmail } from '@/lib/resend/templates/ticket-email';
 import { createElement } from 'react';
@@ -118,6 +119,18 @@ async function handlePaymentSucceeded(
         const signedToken = signTicket(ticket.id);
         const qrBase64 = await generateQRCode(signedToken);
         const qrData = qrBase64.replace(/^data:image\/png;base64,/,'');
+
+        // Generate ticket PDF
+        const pdfBytes = await generateTicketPDF({
+            ticketId:   ticket.id,
+            holderName: ticket.holder_name ?? order.buyer_name,
+            ticketType: ticket.ticket_type ?? 'General',
+            eventTitle: eventData.title,
+            eventDate:  eventData.date,
+            eventVenue: eventData.venue,
+        });
+        const pdfBase64 = Buffer.from(pdfBytes).toString('base64');
+
         await resend.emails.send({
             from:    'onboarding@resend.dev',
             to:      order.buyer_email,
@@ -128,18 +141,25 @@ async function handlePaymentSucceeded(
                 buyerName:    order.buyer_name,
                 qrCodeBase64: `cid:qr-${ticket.id}`,
             })),
-            attachments: [{
-                filename:    `qr-${ticket.id}.png`,
-                content:     qrData,
-                contentType: 'image/png',
-                contentId:   `qr-${ticket.id}`,
-            }],
+            attachments: [
+                {
+                    filename:    `qr-${ticket.id}.png`,
+                    content:     qrData,
+                    contentType: 'image/png',
+                    contentId:   `qr-${ticket.id}`,
+                },
+                {
+                    filename:    `boleto-${ticket.id.slice(0, 8)}.pdf`,
+                    content:     pdfBase64,
+                    contentType: 'application/pdf',
+                },
+            ],
         });
 
         await supabase
             .from('tickets')
             .update({ email_sent_at: new Date().toISOString() })
-            .eq('id', ticket.id)
+            .eq('id', ticket.id);
     }
 }
 

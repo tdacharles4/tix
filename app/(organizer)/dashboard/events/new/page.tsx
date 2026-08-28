@@ -165,6 +165,8 @@ export default function NewEventPage() {
     capacity: '',
     price_mxn: '',
   });
+  const [coverImage, setCoverImage] = useState<File | null>(null);
+  const [coverPreview, setCoverPreview] = useState<string | null>(null);
 
   // "Paginacion" de form modules creacion de evento, creacion de tickets
   const [step, setStep] = useState<1|2>(1);
@@ -220,6 +222,17 @@ export default function NewEventPage() {
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+  }
+
+  function handleImageChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    setCoverImage(file);
+    if (file) {
+      const url = URL.createObjectURL(file);
+      setCoverPreview(url);
+    } else {
+      setCoverPreview(null);
+    }
   }
 
   function combineDatetime(date: string): string {
@@ -332,6 +345,19 @@ export default function NewEventPage() {
         ? { venue: venue.trim(), venue_url: venueUrl.trim() || null, destination: null, destination_url: null, presencial_type: 'lugar_unico' as PresencialType }
         : { venue: venue.trim(), venue_url: venueUrl.trim() || null, destination: destination.trim() || null, destination_url: destinationUrl.trim() || null, presencial_type: 'origen_destino' as PresencialType };
 
+    // Upload cover image if provided
+    let coverImageUrl: string | null = null;
+    if (coverImage) {
+      const ext = coverImage.name.split('.').pop() ?? 'jpg';
+      const path = `${user.id}/${Date.now()}.${ext}`;
+      const { error: uploadErr } = await supabase.storage
+        .from('event-images')
+        .upload(path, coverImage, { cacheControl: '3600', upsert: false });
+      if (uploadErr) { setError(`Error subiendo imagen: ${uploadErr.message}`); setLoading(false); return; }
+      const { data: urlData } = supabase.storage.from('event-images').getPublicUrl(path);
+      coverImageUrl = urlData.publicUrl;
+    }
+
     const parsedMaxTickets = parseInt(maxTicketsPerOrder);
     const maxTicketsValue = Number.isNaN(parsedMaxTickets) ? undefined : parsedMaxTickets;
     const { data, error: dbError } = await supabase
@@ -349,6 +375,7 @@ export default function NewEventPage() {
         price_mxn: basePrice,
         status: 'draft',
         max_tickets_per_order: maxTicketsValue,
+        cover_image_url: coverImageUrl,
       })
       .select()
       .single();
@@ -422,6 +449,30 @@ export default function NewEventPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">Descripción</label>
                 <textarea name="description" rows={4} value={form.description} onChange={handleChange} className={inputCls} />
+              </div>
+
+              {/* Cover image */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Flyer / Imagen de portada</label>
+                {coverPreview && (
+                  <div className="relative mb-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={coverPreview} alt="Preview" className="w-full max-h-64 object-cover rounded-lg border border-gray-700" />
+                    <button
+                      type="button"
+                      onClick={() => { setCoverImage(null); setCoverPreview(null); }}
+                      className="absolute top-2 right-2 bg-gray-900/80 text-white w-7 h-7 rounded-full text-sm hover:bg-red-600 transition-colors"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageChange}
+                  className="block w-full text-sm text-gray-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-gray-800 file:text-gray-300 hover:file:bg-gray-700 file:cursor-pointer"
+                />
               </div>
 
               {/* Date section */}

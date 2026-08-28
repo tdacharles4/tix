@@ -26,6 +26,26 @@ export default async function DashboardPage() {
     .eq('organizer_id', uid)
     .order('date', { ascending: false });
 
+  // Fetch ticket type config prices for all events to show accurate price ranges
+  const eventIds = (events ?? []).map((e) => e.id);
+  const { data: allConfigs } = eventIds.length
+    ? await supabase
+        .from('ticket_type_configs')
+        .select('event_id, price_mxn')
+        .in('event_id', eventIds)
+    : { data: [] };
+
+  const priceRanges: Record<string, { min: number; max: number }> = {};
+  for (const cfg of allConfigs ?? []) {
+    const existing = priceRanges[cfg.event_id];
+    if (!existing) {
+      priceRanges[cfg.event_id] = { min: cfg.price_mxn, max: cfg.price_mxn };
+    } else {
+      existing.min = Math.min(existing.min, cfg.price_mxn);
+      existing.max = Math.max(existing.max, cfg.price_mxn);
+    }
+  }
+
   const statusColors: Record<string, string> = {
     draft:      'bg-gray-800 text-gray-400',
     live:       'bg-emerald-900/50 text-emerald-400',
@@ -105,7 +125,14 @@ export default async function DashboardPage() {
                     <p className="text-gray-600 text-xs">vendidos</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-white text-sm font-medium">{formatMXN(event.price_mxn)}</p>
+                    <p className="text-white text-sm font-medium">
+                      {(() => {
+                        const range = priceRanges[event.id];
+                        if (!range) return formatMXN(event.price_mxn);
+                        if (range.min === range.max) return formatMXN(range.min);
+                        return `${formatMXN(range.min)} — ${formatMXN(range.max)}`;
+                      })()}
+                    </p>
                     <p className="text-gray-600 text-xs">precio</p>
                   </div>
                   <svg className="w-5 h-5 text-gray-600 group-hover:text-gray-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">

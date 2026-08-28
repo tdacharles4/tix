@@ -63,6 +63,10 @@ export default function EditEventPage() {
   const [destination,    setDestination]    = useState('');
   const [destinationUrl, setDestinationUrl] = useState('');
   const [savedLugares,   setSavedLugares]   = useState<Lugar[]>([]);
+  const [coverImage,     setCoverImage]     = useState<File | null>(null);
+  const [coverPreview,   setCoverPreview]   = useState<string | null>(null);
+  const [existingCover,  setExistingCover]  = useState<string | null>(null);
+  const [removeCover,    setRemoveCover]    = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -95,6 +99,7 @@ export default function EditEventPage() {
       setVenueUrl(ev.venue_url ?? '');
       setDestination(ev.destination ?? '');
       setDestinationUrl(ev.destination_url ?? '');
+      if (ev.cover_image_url) setExistingCover(ev.cover_image_url);
       if (lugares) setSavedLugares(lugares as Lugar[]);
       setFetching(false);
     }
@@ -132,6 +137,22 @@ export default function EditEventPage() {
       }
     }
 
+    // Handle cover image upload/removal
+    let coverImageUrl: string | null | undefined = undefined; // undefined = no change
+    if (coverImage) {
+      const { data: { user } } = await supabase.auth.getUser();
+      const ext = coverImage.name.split('.').pop() ?? 'jpg';
+      const path = `${user!.id}/${Date.now()}.${ext}`;
+      const { error: uploadErr } = await supabase.storage
+        .from('event-images')
+        .upload(path, coverImage, { cacheControl: '3600', upsert: false });
+      if (uploadErr) { setError(`Error subiendo imagen: ${uploadErr.message}`); setLoading(false); return; }
+      const { data: urlData } = supabase.storage.from('event-images').getPublicUrl(path);
+      coverImageUrl = urlData.publicUrl;
+    } else if (removeCover) {
+      coverImageUrl = null;
+    }
+
     const locationFields =
       locationType !== 'presencial'
         ? { venue: null, venue_url: null, destination: null, destination_url: null, presencial_type: null }
@@ -148,6 +169,7 @@ export default function EditEventPage() {
         end_time: endTime,
         location_type: locationType,
         ...locationFields,
+        ...(coverImageUrl !== undefined ? { cover_image_url: coverImageUrl } : {}),
       })
       .eq('id', id);
 
@@ -179,6 +201,43 @@ export default function EditEventPage() {
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1">Descripción</label>
           <textarea rows={4} value={description} onChange={(e) => setDescription(e.target.value)} className={inputCls} />
+        </div>
+
+        {/* Cover image */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Flyer / Imagen de portada</label>
+          {(coverPreview || (existingCover && !removeCover)) && (
+            <div className="relative mb-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={coverPreview || existingCover!}
+                alt="Portada"
+                className="w-full max-h-64 object-cover rounded-lg border border-gray-700"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setCoverImage(null);
+                  setCoverPreview(null);
+                  setRemoveCover(true);
+                }}
+                className="absolute top-2 right-2 bg-gray-900/80 text-white w-7 h-7 rounded-full text-sm hover:bg-red-600 transition-colors"
+              >
+                ×
+              </button>
+            </div>
+          )}
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => {
+              const file = e.target.files?.[0] ?? null;
+              setCoverImage(file);
+              setRemoveCover(false);
+              setCoverPreview(file ? URL.createObjectURL(file) : null);
+            }}
+            className="block w-full text-sm text-gray-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-gray-800 file:text-gray-300 hover:file:bg-gray-700 file:cursor-pointer"
+          />
         </div>
 
         {/* Date + Times */}

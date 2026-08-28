@@ -5,6 +5,8 @@ import { lockInventory, releaseStaleOrders } from '@/lib/inventory';
 import { calculateStripeFees } from '@/lib/stripe/fees';
 import { stripe } from '@/lib/stripe/client';
 
+const MAX_TICKETS_HARD_CAP = 6;
+
 export async function POST(req: NextRequest) {
   try {
     const {
@@ -38,12 +40,12 @@ export async function POST(req: NextRequest) {
     const { data: event } = await supabase.from('events').select('*').eq('id', eventId).eq('status', 'live').single();
     if (!event) return NextResponse.json({ error: 'Event not available' }, { status: 404 });
 
-    const cap = Math.min(session.max_quantity, event.max_tickets_per_order);
+    const cap = Math.min(MAX_TICKETS_HARD_CAP, session.max_quantity, event.max_tickets_per_order);
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > cap) {
       return NextResponse.json(
-        { error: `Cantidad invalida. Maximo ${cap} boletos.`},
+        { error: `Cantidad inválida. Máximo ${cap} boletos.`},
         { status: 400 },
-      )
+      );
     }
 
     let ticketTypeName = 'General';

@@ -3,8 +3,9 @@ import { createClient } from '@/lib/supabase/server';
 import type { Event } from '@/lib/supabase/types';
 
 const VALID_TRANSITIONS: Record<string, Event['status'][]> = {
-  draft: ['live'],
-  live:  ['closed', 'cancelled', 'finalizado'],
+  draft:  ['live'],
+  live:   ['closed', 'cancelled', 'finalizado'],
+  closed: ['live'],
 };
 
 type RouteContext = { params: Promise<{ id: string }> };

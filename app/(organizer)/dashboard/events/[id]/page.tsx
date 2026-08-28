@@ -8,6 +8,7 @@ import EventStatusActions from './EventStatusActions';
 import type { PhaseWithTypes } from '@/lib/supabase/types';
 
 type Props = { params: Promise<{ id: string }> };
+// CheckoutLinkGenerator now only needs eventId
 
 export default async function OrganizerEventPage({ params }: Props) {
   const { id } = await params;
@@ -37,9 +38,12 @@ export default async function OrganizerEventPage({ params }: Props) {
 
   const orderIds = [...new Set((tickets ?? []).map((t) => t.order_id))];
   const { data: orders } = orderIds.length
-    ? await serviceClient.from('orders').select('id, buyer_name').in('id', orderIds)
+    ? await serviceClient.from('orders').select('id, buyer_name, amount_mxn, status').in('id', orderIds)
     : { data: [] };
   const orderMap = Object.fromEntries((orders ?? []).map((o) => [o.id, o.buyer_name]));
+  const totalRevenue = (orders ?? [])
+    .filter((o) => o.status === 'paid')
+    .reduce((sum, o) => sum + (o.amount_mxn ?? 0), 0);
 
   const { data: phasesData } = await serviceClient
     .from('ticket_phases')
@@ -68,7 +72,7 @@ export default async function OrganizerEventPage({ params }: Props) {
         </div>
         <div className="flex gap-2 flex-wrap items-center">
           {ev.status === 'live' && (
-            <CheckoutLinkGenerator eventId={id} phases={(phasesData ?? []) as unknown as PhaseWithTypes[]} maxTicketsPerOrder={ev.max_tickets_per_order} />
+            <CheckoutLinkGenerator eventId={id} />
           )}
           <EventStatusActions eventId={id} status={ev.status} />
           <Link
@@ -96,7 +100,7 @@ export default async function OrganizerEventPage({ params }: Props) {
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4">
           <p className="text-xs text-gray-500 uppercase tracking-wide">Recaudado</p>
           <p className="text-2xl font-bold mt-1">
-            {formatMXN(ev.tickets_sold * ev.price_mxn)}
+            {formatMXN(totalRevenue)}
           </p>
         </div>
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4">

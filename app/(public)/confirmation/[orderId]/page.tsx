@@ -11,15 +11,11 @@ type TicketWithQR = Ticket & { qr_image?: string };
 export default function ConfirmationPage() {
   const { orderId } = useParams<{ orderId: string }>();
 
-  const [order,    setOrder]    = useState<Order | null>(null);
-  const [event,    setEvent]    = useState<EventSummary | null>(null);
-  const [tickets,  setTickets]  = useState<TicketWithQR[]>([]);
+  const [order, setOrder] = useState<Order | null>(null);
+  const [event, setEvent] = useState<EventSummary | null>(null);
+  const [tickets, setTickets] = useState<TicketWithQR[]>([]);
   const [fetching, setFetching] = useState(true);
   const [notFound, setNotFound] = useState(false);
-
-  const [emailInput, setEmailInput] = useState('');
-  const [verified,   setVerified]   = useState(false);
-  const [emailError, setEmailError] = useState('');
 
   useEffect(() => {
     let attempts = 0;
@@ -34,7 +30,6 @@ export default function ConfirmationPage() {
       setTickets(data.tickets);
       setFetching(false);
 
-      // Keep polling until paid or we've tried MAX times (~20s)
       if (data.order?.status !== 'paid' && attempts < MAX) {
         attempts++;
         setTimeout(poll, 2000);
@@ -44,18 +39,8 @@ export default function ConfirmationPage() {
     poll();
   }, [orderId]);
 
-  function handleEmailVerify(e: React.FormEvent) {
-    e.preventDefault();
-    if (emailInput.toLowerCase().trim() === order?.buyer_email.toLowerCase()) {
-      setVerified(true);
-      setEmailError('');
-    } else {
-      setEmailError('El correo no coincide con el de la compra.');
-    }
-  }
-
-  if (fetching)  return <div className="p-8 text-gray-400">Cargando…</div>;
-  if (notFound)  return (
+  if (fetching) return <div className="p-8 text-gray-400">Cargando…</div>;
+  if (notFound) return (
     <div className="max-w-lg mx-auto px-4 py-16 text-center">
       <h1 className="text-xl font-bold mb-2">Orden no encontrada</h1>
       <p className="text-gray-400 text-sm">El número de orden no existe o el enlace es incorrecto.</p>
@@ -76,7 +61,7 @@ export default function ConfirmationPage() {
         </h1>
         <p className="text-gray-400 text-sm mt-1">
           {order?.status === 'paid'
-            ? 'Tus boletos han sido enviados a tu correo.'
+            ? 'Tus boletos están listos. También los enviamos a tu correo.'
             : 'Tu pago está siendo procesado.'}
         </p>
       </div>
@@ -84,7 +69,7 @@ export default function ConfirmationPage() {
       {/* Order summary */}
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-6">
         <h2 className="font-semibold mb-3">{event?.title}</h2>
-        {event?.date  && <p className="text-sm text-gray-400 mb-1">{formatDate(event.date)}</p>}
+        {event?.date && <p className="text-sm text-gray-400 mb-1">{formatDate(event.date)}</p>}
         {event?.venue && <p className="text-sm text-gray-400 mb-3">{event.venue}</p>}
         <div className="flex justify-between text-sm border-t border-gray-800 pt-3">
           <span className="text-gray-400">{order?.quantity} boleto{(order?.quantity ?? 0) > 1 ? 's' : ''}</span>
@@ -92,50 +77,40 @@ export default function ConfirmationPage() {
         </div>
       </div>
 
-      {/* Tickets — behind email gate */}
+      {/* Tickets — shown immediately, no email gate */}
       {order?.status === 'paid' && tickets.length > 0 && (
-        <>
-          {!verified ? (
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
-              <h2 className="font-semibold mb-1">Ver tus boletos</h2>
-              <p className="text-sm text-gray-400 mb-4">
-                Ingresa el correo que usaste al comprar para acceder a tus boletos.
+        <div className="space-y-4">
+          <h2 className="font-semibold">
+            Tu{tickets.length > 1 ? 's' : ''} boleto{tickets.length > 1 ? 's' : ''}
+          </h2>
+          {tickets.map((ticket, i) => (
+            <div key={ticket.id} className="bg-gray-900 border border-gray-800 rounded-lg p-5 text-center">
+              <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">
+                Boleto {i + 1} de {tickets.length}
               </p>
-              <form onSubmit={handleEmailVerify} className="space-y-3">
-                <input type="email" required placeholder="correo@ejemplo.com"
-                  value={emailInput} onChange={(e) => setEmailInput(e.target.value)}
-                  className="w-full border border-gray-700 bg-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                {emailError && <p className="text-red-400 text-xs">{emailError}</p>}
-                <button type="submit"
-                  className="w-full bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">
-                  Ver boletos
-                </button>
-              </form>
+              {ticket.holder_name && (
+                <p className="text-sm font-semibold mb-1">{ticket.holder_name}</p>
+              )}
+              <p className="text-xs text-gray-400 mb-3">{ticket.ticket_type}</p>
+              {ticket.qr_image && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={ticket.qr_image} alt={`QR boleto ${ticket.id}`} className="w-48 h-48 mx-auto mb-3" />
+              )}
+              <p className="text-xs text-gray-500 font-mono mb-4">{ticket.id}</p>
+              <a
+                href={`/api/tickets/${ticket.id}/pdf`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Descargar PDF
+              </a>
             </div>
-          ) : (
-            <div className="space-y-4">
-              <h2 className="font-semibold">
-                Tu{tickets.length > 1 ? 's' : ''} boleto{tickets.length > 1 ? 's' : ''}
-              </h2>
-              {tickets.map((ticket, i) => (
-                <div key={ticket.id} className="bg-gray-900 border border-gray-800 rounded-lg p-5 text-center">
-                  <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">
-                    Boleto {i + 1} de {tickets.length}
-                  </p>
-                  {ticket.holder_name && (
-                    <p className="text-sm font-semibold mb-1">{ticket.holder_name}</p>
-                  )}
-                  <p className="text-xs text-gray-400 mb-3">{ticket.ticket_type}</p>
-                  {ticket.qr_image && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={ticket.qr_image} alt={`QR boleto ${ticket.id}`} className="w-48 h-48 mx-auto mb-3" />
-                  )}
-                  <p className="text-xs text-gray-400 font-mono">{ticket.id}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
+          ))}
+        </div>
       )}
 
       {order?.status === 'pending' && (

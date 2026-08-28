@@ -37,6 +37,7 @@ export type Event = {
   tickets_sold: number;
   price_mxn: number;
   status: 'draft' | 'live' | 'closed' | 'cancelled' | 'finalizado';
+  cover_image_url: string | null;
   conekta_product_id: string | null;
   created_at: string;
   max_tickets_per_order: number;
@@ -57,6 +58,7 @@ export type EventInsert = {
   capacity: number;
   price_mxn: number;
   status?: 'draft' | 'live' | 'closed' | 'cancelled' | 'finalizado';
+  cover_image_url?: string | null;
   conekta_product_id?: string | null;
   tickets_sold?: number;
   max_tickets_per_order?: number

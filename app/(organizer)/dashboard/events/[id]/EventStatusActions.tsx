@@ -26,6 +26,11 @@ const STATUS_CONFIG: Record<string, { label: string; message: string }> = {
     message:
       'Finalizar el evento marcará el evento como finalizado e inhabilitará la compra de boletos. Al marcar este estado el organizador define que este evento ya sucedió. Un evento se marcará como finalizado por si mismo una vez que hayan pasado la fecha y el horario establecidos.',
   },
+  reopen: {
+    label: 'Reabrir Evento',
+    message:
+      'Reabrir el evento lo volverá a publicar y habilitará nuevamente la compra de boletos.',
+  },
 };
 
 export default function EventStatusActions({ eventId, status }: Props) {
@@ -52,10 +57,11 @@ export default function EventStatusActions({ eventId, status }: Props) {
     setLoading(true);
     setError('');
     try {
+      const apiStatus = confirmTarget === 'reopen' ? 'live' : confirmTarget;
       const res = await fetch(`/api/events/${eventId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: confirmTarget }),
+        body: JSON.stringify({ status: apiStatus }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -82,6 +88,16 @@ export default function EventStatusActions({ eventId, status }: Props) {
           className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors"
         >
           Publicar Evento
+        </button>
+      )}
+
+      {/* Closed → Reabrir button */}
+      {status === 'closed' && (
+        <button
+          onClick={() => setConfirmTarget('reopen')}
+          className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors"
+        >
+          Reabrir Evento
         </button>
       )}
 

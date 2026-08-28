@@ -36,7 +36,8 @@ export async function POST(req: NextRequest){
             await handlePaymentSucceeded(pi, supabase);
             break;
         }
-        case 'payment_intent.payment_failed': {
+        case 'payment_intent.payment_failed':
+        case 'payment_intent.canceled': {
             const pi = event.data.object as Stripe.PaymentIntent;
             await handlePaymentFailed(pi, supabase);
             break;

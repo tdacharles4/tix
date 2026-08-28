@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
 import { getPlatformFee } from '@/lib/utils';
-import { lockInventory } from '@/lib/inventory';
+import { lockInventory, releaseStaleOrders } from '@/lib/inventory';
 import { calculateStripeFees } from '@/lib/stripe/fees';
 import { stripe } from '@/lib/stripe/client';
 
@@ -64,6 +64,9 @@ export async function POST(req: NextRequest) {
     // Calculate fee before lockInventory so the RPC receives the real value
     const unitPrice   = unitPriceOverride ?? event.price_mxn;
     const platformFee = getPlatformFee(unitPrice, quantity);
+
+    // Release stale pending orders before checking availability
+    await releaseStaleOrders(eventId);
 
     // Reserve inventory atomically via DB function
     const orderId = await lockInventory(

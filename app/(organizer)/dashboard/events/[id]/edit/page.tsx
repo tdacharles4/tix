@@ -52,6 +52,7 @@ export default function EditEventPage() {
   const [priceMxn, setPriceMxn] = useState(0);
 
   const [date,      setDate]      = useState('');
+  const [endDate,   setEndDate]   = useState('');
   const [timeStart, setTimeStart] = useState('');
   const [timeEnd,   setTimeEnd]   = useState('');
 
@@ -83,6 +84,11 @@ export default function EditEventPage() {
       setDate(ev.date ? toLocalDate(ev.date) : '');
       setTimeStart(ev.date ? toLocalTime(ev.date) : '');
       setTimeEnd(ev.end_time ? toLocalTime(ev.end_time) : '');
+      if (ev.end_time) {
+        const endDateStr = toLocalDate(ev.end_time);
+        const startDateStr = ev.date ? toLocalDate(ev.date) : '';
+        if (endDateStr !== startDateStr) setEndDate(endDateStr);
+      }
       setLocationType(ev.location_type);
       setPresencialType(ev.presencial_type ?? 'lugar_unico');
       setVenue(ev.venue ?? '');
@@ -109,7 +115,8 @@ export default function EditEventPage() {
     const supabase = createClient();
 
     const primaryDate = new Date(`${date}T${timeStart || '00:00'}`).toISOString();
-    const endTime     = timeEnd && date ? new Date(`${date}T${timeEnd}`).toISOString() : null;
+    const endTimeDate = endDate || date;
+    const endTime     = timeEnd && endTimeDate ? new Date(`${endTimeDate}T${timeEnd}`).toISOString() : null;
 
     if(status==='live' && priceMxn>0){
       const { data: { user } } = await supabase.auth.getUser();
@@ -141,7 +148,6 @@ export default function EditEventPage() {
         end_time: endTime,
         location_type: locationType,
         ...locationFields,
-        status,
       })
       .eq('id', id);
 
@@ -177,8 +183,27 @@ export default function EditEventPage() {
 
         {/* Date + Times */}
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">Fecha</label>
+          <label className="block text-sm font-medium text-gray-300 mb-2">Fecha de inicio</label>
           <DatePicker value={date} onChange={setDate} />
+
+          <div className="mt-3">
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Fecha de fin
+              <span className="text-gray-500 font-normal ml-1">(opcional, para eventos de varios días)</span>
+            </label>
+            <div className="flex gap-2 items-center">
+              <div className="flex-1">
+                <DatePicker value={endDate} onChange={setEndDate} placeholder="Mismo día" />
+              </div>
+              {endDate && (
+                <button type="button" onClick={() => setEndDate('')}
+                  className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
+                  Quitar
+                </button>
+              )}
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-3 mt-3">
             <div>
               <label className="block text-xs text-gray-400 mb-1">Hora de inicio</label>
@@ -275,16 +300,19 @@ export default function EditEventPage() {
           )}
         </div>
 
-        {/* Status */}
+        {/* Status (read-only) */}
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">Estado</label>
-          <div className="flex gap-1.5">
-            {STATUS_OPTIONS.map(({ id: sid, label }) => (
-              <button key={sid} type="button" onClick={() => setStatus(sid)} className={pillCls(status === sid)}>
-                {label}
-              </button>
-            ))}
-          </div>
+          <span className={`inline-block px-3 py-1.5 rounded-full text-xs font-medium ${
+            status === 'draft' ? 'bg-gray-800 text-gray-400'
+            : status === 'live' ? 'bg-emerald-900/50 text-emerald-400'
+            : status === 'closed' ? 'bg-amber-900/50 text-amber-400'
+            : status === 'cancelled' ? 'bg-red-900/50 text-red-400'
+            : 'bg-indigo-900/50 text-indigo-400'
+          }`}>
+            {STATUS_OPTIONS.find((s) => s.id === status)?.label ?? status}
+          </span>
+          <p className="text-xs text-gray-500 mt-1">El estado se cambia desde la vista del evento.</p>
         </div>
 
         {error && <p className="text-red-400 text-sm">{error}</p>}

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { formatMXN, formatDate } from '@/lib/utils';
 import EventTabs from './EventTabs';
 import CheckoutLinkGenerator from './CheckoutLinkGenerator';
+import EventStatusActions from './EventStatusActions';
 import type { PhaseWithTypes } from '@/lib/supabase/types';
 
 type Props = { params: Promise<{ id: string }> };
@@ -65,10 +66,11 @@ export default async function OrganizerEventPage({ params }: Props) {
           <h1 className="text-2xl font-bold">{ev.title}</h1>
           <p className="text-gray-400 text-sm mt-1">{formatDate(ev.date)} · {ev.venue}</p>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-center">
           {ev.status === 'live' && (
             <CheckoutLinkGenerator eventId={id} phases={(phasesData ?? []) as unknown as PhaseWithTypes[]} maxTicketsPerOrder={ev.max_tickets_per_order} />
           )}
+          <EventStatusActions eventId={id} status={ev.status} />
           <Link
             href={`/dashboard/events/${id}/edit`}
             className="border border-gray-700 text-gray-300 px-4 py-2 rounded-lg text-sm hover:bg-gray-800 transition-colors"

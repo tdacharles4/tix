@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 import { stripe } from '@/lib/stripe/client';
 import { createServiceClient } from '@/lib/supabase/server';
 import { generateQRCode } from '@/lib/qr/generate';
+import { signTicket } from '@/lib/qr/sign';
 import { resend } from '@/lib/resend/client';
 import { TicketEmail } from '@/lib/resend/templates/ticket-email';
 import { createElement } from 'react';
@@ -114,7 +115,8 @@ async function handlePaymentSucceeded(
     }
 
     for (const ticket of tickets) {
-        const qrBase64 = await generateQRCode(ticket.id);
+        const signedToken = signTicket(ticket.id);
+        const qrBase64 = await generateQRCode(signedToken);
         const qrData = qrBase64.replace(/^data:image\/png;base64,/,'');
         await resend.emails.send({
             from:    'onboarding@resend.dev',

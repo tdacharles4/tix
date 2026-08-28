@@ -60,6 +60,7 @@ function CheckinScanner() {
     transferred: 'Boleto transferido',
     not_found: 'No encontrado',
     wrong_event: 'Otro evento',
+    invalid_signature: 'QR inválido',
   };
 
   useEffect(() => {

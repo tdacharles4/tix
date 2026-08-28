@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
 import { signTicket } from '@/lib/qr/sign';
-import QRCode from 'qrcode' ;
+import QRCode from 'qrcode';
 
 export async function GET(_req: NextRequest, { params }: { params: { orderId: string } }) {
   const { orderId } = params;
@@ -15,13 +15,17 @@ export async function GET(_req: NextRequest, { params }: { params: { orderId: st
     supabase.from('tickets').select('*').eq('order_id', orderId),
   ]);
 
-  const signedTickets = await Promise.all(
-    (tickets??[]).map(async (ticket)=>{
+  const ticketsWithQR = await Promise.all(
+    (tickets ?? []).map(async (ticket) => {
       const token = signTicket(ticket.id);
-      const qrImage = await QRCode.toDataURL(token);
+      const qrImage = await QRCode.toDataURL(token, {
+        errorCorrectionLevel: 'H',
+        margin: 2,
+        width: 300,
+      });
       return { ...ticket, qr_image: qrImage };
     })
   );
 
-  return NextResponse.json({ order, event, tickets: signedTickets });
+  return NextResponse.json({ order, event, tickets: ticketsWithQR });
 }

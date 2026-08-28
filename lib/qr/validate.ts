@@ -1,14 +1,20 @@
 import { createServiceClient } from '@/lib/supabase/server';
+import { verifyTicket, extractTicketId } from '@/lib/qr/sign';
 
 export type ValidationResult =
   | { valid: true; ticket: Record<string, unknown>; event: Record<string, unknown>; buyer: Record<string, unknown> }
-  | { valid: false; reason: 'redeemed' | 'cancelled' | 'transferred' | 'not_found' | 'wrong_event' };
+  | { valid: false; reason: 'redeemed' | 'cancelled' | 'transferred' | 'not_found' | 'wrong_event' | 'invalid_signature' };
 
 export async function validateAndRedeemTicket(
-  ticketId: string,
+  scannedToken: string,
   eventId: string,
   redeemedBy: string
 ): Promise<ValidationResult> {
+  // Verify signature — reject forged QR codes
+  if (!verifyTicket(scannedToken)) {
+    return { valid: false, reason: 'invalid_signature' };
+  }
+  const ticketId = extractTicketId(scannedToken);
   const supabase = createServiceClient();
 
   const { data: rows, error } = await supabase.rpc('redeem_ticket', {

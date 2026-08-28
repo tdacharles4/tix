@@ -80,8 +80,8 @@ export default function CheckinPage() {
   }
 
   const resultBg = result?.valid
-    ? 'bg-green-50 border-green-300'
-    : 'bg-red-50 border-red-300';
+    ? 'bg-emerald-900/30 border-emerald-700'
+    : 'bg-red-900/30 border-red-700';
 
   const reasonLabels: Record<string, string> = {
     already_redeemed: 'Ya fue canjeado',
@@ -127,21 +127,21 @@ export default function CheckinPage() {
         {result && (
           <div className={`w-full max-w-xs border rounded-xl p-5 ${resultBg}`}>
             {result.valid ? (
-              <div className="text-gray-900">
+              <div>
                 <div className="flex items-center gap-2 mb-3">
-                  <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
+                  <div className="w-8 h-8 bg-emerald-500 rounded-full flex items-center justify-center">
                     <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </svg>
                   </div>
-                  <span className="font-bold text-green-800 text-lg">Válido</span>
+                  <span className="font-bold text-emerald-400 text-lg">Válido</span>
                 </div>
-                <p className="font-semibold text-gray-800">
+                <p className="font-semibold">
                   {String((result.buyer as Record<string, unknown>).full_name ?? (result.ticket as Record<string, unknown>).buyer_email ?? '')}
                 </p>
-                <p className="text-sm text-gray-600">{String((result.ticket as Record<string, unknown>).ticket_type ?? '')}</p>
+                <p className="text-sm text-gray-400">{String((result.ticket as Record<string, unknown>).ticket_type ?? '')}</p>
                 {Boolean((result.ticket as Record<string, unknown>).seat_label) && (
-                  <p className="text-sm text-gray-600">Asiento: {String((result.ticket as Record<string, unknown>).seat_label)}</p>
+                  <p className="text-sm text-gray-400">Asiento: {String((result.ticket as Record<string, unknown>).seat_label)}</p>
                 )}
               </div>
             ) : (
@@ -152,8 +152,8 @@ export default function CheckinPage() {
                   </svg>
                 </div>
                 <div>
-                  <p className="font-bold text-red-800">No válido</p>
-                  <p className="text-sm text-red-700">
+                  <p className="font-bold text-red-400">No válido</p>
+                  <p className="text-sm text-red-300/80">
                     {reasonLabels[result.reason] ?? result.reason}
                   </p>
                 </div>
@@ -162,7 +162,7 @@ export default function CheckinPage() {
 
             <button
               onClick={handleScanAnother}
-              className="mt-4 w-full border border-gray-300 text-gray-700 py-2 rounded-lg text-sm hover:bg-gray-100"
+              className="mt-4 w-full border border-gray-700 text-gray-300 py-2 rounded-lg text-sm hover:bg-gray-800"
             >
               Escanear otro
             </button>

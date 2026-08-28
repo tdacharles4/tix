@@ -47,9 +47,9 @@ export async function GET() {
     }).join('');
 
     await resend.emails.send({
-        from: 'Boletera <onboarding@resend.dev>',
+        from: 'Climate Control <onboarding@resend.dev>',
         to: process.env.ADMIN_EMAIL!,
-        subject: `${pending.length} solicitud(es) pendiente(s) — Boletera`,
+        subject: `${pending.length} solicitud(es) pendiente(s) — Climate Control`,
         html: `
         <h2>Solicitudes de acceso del día</h2>
         <table border="1" cellpadding="8">

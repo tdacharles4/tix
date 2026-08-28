@@ -53,9 +53,9 @@ export async function GET(req: NextRequest){
                     const denyUrl    = `${base}/api/admin/action?userId=${user.id}&token=${token}&action=deny`;
 
                     await resend.emails.send({
-                        from: 'Boletera <onboarding@resend.dev>',
+                        from: 'Climate Control <onboarding@resend.dev>',
                         to: process.env.ADMIN_EMAIL!,
-                        subject: 'Nueva solicitud de acceso — Boletera',
+                        subject: 'Nueva solicitud de acceso — Climate Control',
                         html: `
                         <h2>Nueva solicitud de acceso</h2>
                         <p><strong>Nombre:</strong> ${profile.full_name ?? '—'}</p>
@@ -74,5 +74,5 @@ export async function GET(req: NextRequest){
         }
     }
 
-    return NextResponse.redirect(`${origin}/login?error=auth_failed`);
+    return NextResponse.redirect(`${origin}/?error=auth_failed`);
 }

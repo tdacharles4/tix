@@ -61,12 +61,12 @@ function MultiCalendar({
   ];
 
   return (
-    <div className="border border-gray-200 rounded-lg p-4 w-72">
+    <div className="border border-gray-700 rounded-lg p-4 w-72">
       <div className="flex items-center justify-between mb-3">
         <button
           type="button"
           onClick={() => setViewDate(new Date(year, month - 1, 1))}
-          className="p-1 text-gray-500 hover:bg-gray-100 rounded text-lg leading-none"
+          className="p-1 text-gray-400 hover:bg-gray-800 rounded text-lg leading-none"
         >
           ‹
         </button>
@@ -74,7 +74,7 @@ function MultiCalendar({
         <button
           type="button"
           onClick={() => setViewDate(new Date(year, month + 1, 1))}
-          className="p-1 text-gray-500 hover:bg-gray-100 rounded text-lg leading-none"
+          className="p-1 text-gray-400 hover:bg-gray-800 rounded text-lg leading-none"
         >
           ›
         </button>
@@ -95,7 +95,7 @@ function MultiCalendar({
               type="button"
               onClick={() => toggleDate(dateStr)}
               className={`text-xs py-1 rounded ${
-                isSelected ? 'bg-indigo-600 text-white' : 'text-gray-700 hover:bg-gray-100'
+                isSelected ? 'bg-indigo-600 text-white' : 'text-gray-300 hover:bg-gray-800'
               }`}
             >
               {day}
@@ -104,7 +104,7 @@ function MultiCalendar({
         })}
       </div>
       {selected.length > 0 && (
-        <p className="text-xs text-indigo-600 mt-2 font-medium">
+        <p className="text-xs text-indigo-400 mt-2 font-medium">
           {selected.length} fecha(s) seleccionada(s)
         </p>
       )}
@@ -132,7 +132,7 @@ function VenueInput({
   const listId = `lugares-${id}`;
   return (
     <div>
-      <label htmlFor={id} className="block text-xs text-gray-500 mb-1">
+      <label htmlFor={id} className="block text-xs text-gray-400 mb-1">
         {label}{required && ' *'}
       </label>
       <input
@@ -317,7 +317,7 @@ export default function NewEventPage() {
     setLoading(true);
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { router.push('/login'); return; }
+    if (!user) { router.push('/'); return; }
 
     let endTime: string | null = null;
     if (timeEnd) {
@@ -396,16 +396,16 @@ export default function NewEventPage() {
     router.push(`/dashboard/events/${data.id}`);
   }
 
-  const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500';
+  const inputCls = 'w-full border border-gray-700 bg-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500';
   const pillCls = (active: boolean) =>
     `px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-      active ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+      active ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
     }`;
 
   return (
     <>
       <div className="max-w-2xl mx-auto px-4 py-8">
-        <h1 className="text-2xl font-bold text-gray-900 mb-6">
+        <h1 className="text-2xl font-bold mb-6">
           {step === 1 ? 'Nuevo evento' : 'Creación de boletos'}
         </h1>
 
@@ -415,18 +415,18 @@ export default function NewEventPage() {
           {step === 1 && (
             <>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Título *</label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Título *</label>
                 <input name="title" type="text" required value={form.title} onChange={handleChange} className={inputCls} />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Descripción</label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Descripción</label>
                 <textarea name="description" rows={4} value={form.description} onChange={handleChange} className={inputCls} />
               </div>
 
               {/* Date section */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Fecha</label>
+                <label className="block text-sm font-medium text-gray-300 mb-2">Fecha</label>
                 <div className="flex flex-wrap gap-1.5 mb-3">
                   {DATE_MODES.map(({ id, label }) => (
                     <button key={id} type="button" onClick={() => setDateMode(id)} className={pillCls(dateMode === id)}>
@@ -451,11 +451,11 @@ export default function NewEventPage() {
                 {dateMode === 'recurrente' && (
                   <div className="space-y-3">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Fecha de inicio</label>
+                      <label className="block text-xs text-gray-400 mb-1">Fecha de inicio</label>
                       <DatePicker value={recStartDate} onChange={setRecStartDate} />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Frecuencia</label>
+                      <label className="block text-xs text-gray-400 mb-1">Frecuencia</label>
                       <div className="flex gap-1.5">
                         {(['semanal', 'mensual', 'otro'] as RecFreq[]).map((f) => (
                           <button key={f} type="button" onClick={() => setRecFreq(f)} className={pillCls(recFreq === f)}>
@@ -466,15 +466,15 @@ export default function NewEventPage() {
                     </div>
                     {recFreq === 'otro' && (
                       <div className="flex items-center gap-2">
-                        <span className="text-sm text-gray-600">Cada</span>
+                        <span className="text-sm text-gray-400">Cada</span>
                         <input
                           type="number"
                           min={1}
                           value={recEveryDays}
                           onChange={(e) => setRecEveryDays(Math.max(1, parseInt(e.target.value) || 1))}
-                          className="w-20 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          className="w-20 border border-gray-700 bg-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
-                        <span className="text-sm text-gray-600">día(s)</span>
+                        <span className="text-sm text-gray-400">día(s)</span>
                       </div>
                     )}
                   </div>
@@ -491,11 +491,11 @@ export default function NewEventPage() {
                 {dateMode !== 'sin_fecha' && (
                   <div className="grid grid-cols-2 gap-3 mt-3">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Hora de inicio</label>
+                      <label className="block text-xs text-gray-400 mb-1">Hora de inicio</label>
                       <TimePicker value={timeStart} onChange={setTimeStart} />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Hora de fin</label>
+                      <label className="block text-xs text-gray-400 mb-1">Hora de fin</label>
                       <TimePicker value={timeEnd} onChange={setTimeEnd} />
                     </div>
                   </div>
@@ -504,7 +504,7 @@ export default function NewEventPage() {
 
               {/* Location section */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Lugar</label>
+                <label className="block text-sm font-medium text-gray-300 mb-2">Lugar</label>
                 <div className="flex gap-1.5 mb-3">
                   {LOCATION_TYPES.map(({ id, label }) => (
                     <button key={id} type="button" onClick={() => setLocationType(id)} className={pillCls(locationType === id)}>
@@ -527,7 +527,7 @@ export default function NewEventPage() {
                       <div className="space-y-2">
                         <VenueInput id="venue" label="Lugar" required value={venue} onChange={setVenue} lugares={savedLugares} inputCls={inputCls} />
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1">URL de ubicación</label>
+                          <label className="block text-xs text-gray-400 mb-1">URL de ubicación</label>
                           <input type="url" value={venueUrl} onChange={(e) => setVenueUrl(e.target.value)} placeholder="https://maps.google.com/..." className={inputCls} />
                         </div>
                       </div>
@@ -538,14 +538,14 @@ export default function NewEventPage() {
                         <div className="space-y-2">
                           <VenueInput id="venue-origen" label="Origen" required value={venue} onChange={setVenue} lugares={savedLugares} inputCls={inputCls} />
                           <div>
-                            <label className="block text-xs text-gray-500 mb-1">URL de ubicación (origen)</label>
+                            <label className="block text-xs text-gray-400 mb-1">URL de ubicación (origen)</label>
                             <input type="url" value={venueUrl} onChange={(e) => setVenueUrl(e.target.value)} placeholder="https://maps.google.com/..." className={inputCls} />
                           </div>
                         </div>
                         <div className="space-y-2">
                           <VenueInput id="venue-destino" label="Destino" required value={destination} onChange={setDestination} lugares={savedLugares} inputCls={inputCls} />
                           <div>
-                            <label className="block text-xs text-gray-500 mb-1">URL de ubicación (destino)</label>
+                            <label className="block text-xs text-gray-400 mb-1">URL de ubicación (destino)</label>
                             <input type="url" value={destinationUrl} onChange={(e) => setDestinationUrl(e.target.value)} placeholder="https://maps.google.com/..." className={inputCls} />
                           </div>
                         </div>
@@ -568,7 +568,7 @@ export default function NewEventPage() {
           {step === 2 && (
             <>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Cantidad máxima de boletos por pedido</label>
+                <label className="block text-xs text-gray-400 mb-1">Cantidad máxima de boletos por pedido</label>
                 <input
                   type="number"
                   min={1}
@@ -579,11 +579,11 @@ export default function NewEventPage() {
               </div>
 
               {phases.map((phase, pi) => (
-                <div key={phase.id} className="border border-indigo-200 rounded-xl p-4 space-y-4 bg-indigo-50/30">
+                <div key={phase.id} className="border border-gray-700 rounded-xl p-4 space-y-4 bg-gray-900">
 
                   {/* Phase header */}
                   <div className="flex items-center gap-3">
-                    <span className="text-xs font-semibold text-indigo-600 uppercase tracking-wide whitespace-nowrap">
+                    <span className="text-xs font-semibold text-indigo-400 uppercase tracking-wide whitespace-nowrap">
                       Fase {pi + 1}
                     </span>
                     <input
@@ -607,7 +607,7 @@ export default function NewEventPage() {
                   {/* Phase end condition */}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Fecha de fin de fase</label>
+                      <label className="block text-xs text-gray-400 mb-1">Fecha de fin de fase</label>
                       <input
                         type="date"
                         value={phase.endDate}
@@ -623,7 +623,7 @@ export default function NewEventPage() {
                         onChange={(e) => updatePhase(phase.id, 'endOnSoldOut', e.target.checked)}
                         className="w-4 h-4 accent-indigo-600"
                       />
-                      <label htmlFor={`soldout-${phase.id}`} className="text-xs text-gray-600">
+                      <label htmlFor={`soldout-${phase.id}`} className="text-xs text-gray-400">
                         Termina al agotar existencias
                       </label>
                     </div>
@@ -632,9 +632,9 @@ export default function NewEventPage() {
                   {/* Ticket types inside this phase */}
                   <div className="space-y-3">
                     {phase.ticketTypes.map((tt, ti) => (
-                      <div key={tt.id} className="border border-gray-200 rounded-lg p-3 space-y-3 bg-white">
+                      <div key={tt.id} className="border border-gray-700 rounded-lg p-3 space-y-3 bg-gray-800/50">
                         <div className="flex justify-between items-center">
-                          <span className="text-xs font-medium text-gray-500">Tipo {ti + 1}</span>
+                          <span className="text-xs font-medium text-gray-400">Tipo {ti + 1}</span>
                           {phase.ticketTypes.length > 1 && (
                             <button
                               type="button"
@@ -654,7 +654,7 @@ export default function NewEventPage() {
                           )}
                         </div>
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1">Nombre del boleto *</label>
+                          <label className="block text-xs text-gray-400 mb-1">Nombre del boleto *</label>
                           <input
                             type="text"
                             required
@@ -666,7 +666,7 @@ export default function NewEventPage() {
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label className="block text-xs text-gray-500 mb-1">Precio (MXN) *</label>
+                            <label className="block text-xs text-gray-400 mb-1">Precio (MXN) *</label>
                             <input
                               type="number"
                               required
@@ -678,7 +678,7 @@ export default function NewEventPage() {
                             />
                           </div>
                           <div>
-                            <label className="block text-xs text-gray-500 mb-1">Cantidad *</label>
+                            <label className="block text-xs text-gray-400 mb-1">Cantidad *</label>
                             <input
                               type="number"
                               required
@@ -697,18 +697,18 @@ export default function NewEventPage() {
                             onChange={(e) => updateTicketType(phase.id, tt.id, 'enumerateFromOne', e.target.checked)}
                             className="w-4 h-4 accent-indigo-600"
                           />
-                          <label htmlFor={`enumerate-${tt.id}`} className="text-xs text-gray-600">
+                          <label htmlFor={`enumerate-${tt.id}`} className="text-xs text-gray-400">
                             Enumerar a partir de 1
                           </label>
                           {!tt.enumerateFromOne && (
                             <div className="flex items-center gap-2">
-                              <label className="text-xs text-gray-500">Enumerar a partir de:</label>
+                              <label className="text-xs text-gray-400">Enumerar a partir de:</label>
                               <input
                                 type="number"
                                 min={1}
                                 value={tt.enumerateFrom}
                                 onChange={(e) => updateTicketType(phase.id, tt.id, 'enumerateFrom', e.target.value)}
-                                className="w-24 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                className="w-24 border border-gray-700 bg-gray-800 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                               />
                             </div>
                           )}
@@ -727,7 +727,7 @@ export default function NewEventPage() {
                           )
                         )
                       }
-                      className="text-xs text-indigo-600 hover:underline"
+                      className="text-xs text-indigo-400 hover:underline"
                     >
                       + Agregar tipo de boleto
                     </button>
@@ -743,14 +743,14 @@ export default function NewEventPage() {
                     { id: String(Date.now()), name: '', endDate: '', endOnSoldOut: false, ticketTypes: [{ id: String(Date.now() + 1), name: '', price: '', quantity: '', enumerateFromOne: true, enumerateFrom: '' }] },
                   ])
                 }
-                className="text-sm text-indigo-600 hover:underline"
+                className="text-sm text-indigo-400 hover:underline"
               >
                 + Agregar fase
               </button>
             </>
           )}
 
-          {error && <p className="text-red-600 text-sm">{error}</p>}
+          {error && <p className="text-red-400 text-sm">{error}</p>}
 
           {/* ── Buttons ── */}
           <div className="flex gap-3 pt-2">
@@ -775,7 +775,7 @@ export default function NewEventPage() {
               <button
                 type="button"
                 onClick={() => setShowBackAlert(true)}
-                className="border border-gray-300 text-gray-700 px-6 py-2 rounded-lg text-sm hover:bg-gray-50"
+                className="border border-gray-700 text-gray-300 px-6 py-2 rounded-lg text-sm hover:bg-gray-800"
               >
                 Regresar a creacion de evento
               </button>
@@ -783,7 +783,7 @@ export default function NewEventPage() {
             <button
               type="button"
               onClick={() => router.push('/dashboard')}
-              className="border border-gray-300 text-gray-700 px-6 py-2 rounded-lg text-sm hover:bg-gray-50"
+              className="border border-gray-700 text-gray-300 px-6 py-2 rounded-lg text-sm hover:bg-gray-800"
             >
               Cancelar
             </button>
@@ -794,8 +794,8 @@ export default function NewEventPage() {
       {/* ── Back confirmation modal ── */}
       {showBackAlert && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-lg p-6 max-w-sm w-full mx-4 space-y-4">
-            <p className="text-sm text-gray-700">
+          <div className="bg-gray-900 border border-gray-800 rounded-xl shadow-lg p-6 max-w-sm w-full mx-4 space-y-4">
+            <p className="text-sm text-gray-300">
               Regresar a creacion de eventos eliminara los cambios realizados en la creacion de boletos.
             </p>
             <div className="flex gap-3 justify-end">

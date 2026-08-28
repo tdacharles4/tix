@@ -13,7 +13,7 @@ export function ConnectStripeButton() {
             const res  = await fetch('/api/stripe/connect', { method: 'POST' });
             const data = await res.json();
             if (data.alreadyConnected) { window.location.reload(); return; }
-            if (data.url)              { window.location.href = data.url; return; }
+            if (data.url)              { window.open(data.url, '_blank', 'noopener'); setLoading(false); return; }
             setError('Error al conectar con Stripe. Intenta de nuevo.');
         } catch {
             setError('Error de conexión.');
@@ -30,7 +30,7 @@ export function ConnectStripeButton() {
             >
                 {loading ? 'Cargando…' : 'Conectar cuenta de pagos'}
             </button>
-            {error && <p className="text-red-600 text-sm mt-2">{error}</p>}
+            {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
         </div>
     );
 }
@@ -43,7 +43,7 @@ export function StripeLoginButton() {
         try {
             const res  = await fetch('/api/stripe/login-link');
             const data = await res.json();
-            if (data.url) { window.location.href = data.url; return; }
+            if (data.url) { window.open(data.url, '_blank', 'noopener'); setLoading(false); return; }
         } catch { /* fall through */ }
         setLoading(false);
     }
@@ -52,7 +52,7 @@ export function StripeLoginButton() {
         <button
             onClick={handleClick}
             disabled={loading}
-            className="text-sm text-indigo-600 hover:underline disabled:opacity-50"
+            className="text-sm text-indigo-400 hover:underline disabled:opacity-50"
         >
             {loading ? 'Cargando…' : 'Gestionar cuenta en Stripe →'}
         </button>

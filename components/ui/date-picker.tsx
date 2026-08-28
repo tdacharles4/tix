@@ -30,10 +30,10 @@ function CalendarGrid({ selected, onSelect }: { selected: string; onSelect: (d: 
     <div className="p-3 w-64">
       <div className="flex items-center justify-between mb-3">
         <button type="button" onClick={() => setViewDate(new Date(year, month - 1, 1))}
-          className="p-1 text-gray-500 hover:bg-gray-100 rounded text-lg leading-none">‹</button>
+          className="p-1 text-gray-400 hover:bg-gray-700 rounded text-lg leading-none">‹</button>
         <span className="text-sm font-medium capitalize">{monthName}</span>
         <button type="button" onClick={() => setViewDate(new Date(year, month + 1, 1))}
-          className="p-1 text-gray-500 hover:bg-gray-100 rounded text-lg leading-none">›</button>
+          className="p-1 text-gray-400 hover:bg-gray-700 rounded text-lg leading-none">›</button>
       </div>
       <div className="grid grid-cols-7 text-center text-xs text-gray-400 mb-1">
         {['D','L','M','X','J','V','S'].map((d) => <span key={d}>{d}</span>)}
@@ -45,7 +45,7 @@ function CalendarGrid({ selected, onSelect }: { selected: string; onSelect: (d: 
           const isSelected = selected === dateStr;
           return (
             <button key={i} type="button" onClick={() => onSelect(dateStr)}
-              className={`text-xs py-1.5 rounded ${isSelected ? 'bg-indigo-600 text-white' : 'text-gray-700 hover:bg-gray-100'}`}>
+              className={`text-xs py-1.5 rounded ${isSelected ? 'bg-indigo-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}>
               {day}
             </button>
           );
@@ -71,7 +71,7 @@ export function DatePicker({ value, onChange, placeholder = 'Selecciona una fech
           <ChevronDownIcon className="size-4" />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto p-0 bg-white shadow-lg" align="start">
+      <PopoverContent className="w-auto p-0 bg-gray-900 border border-gray-700 shadow-lg" align="start">
         <CalendarGrid selected={value} onSelect={(d) => { onChange(d); setOpen(false); }} />
       </PopoverContent>
     </Popover>

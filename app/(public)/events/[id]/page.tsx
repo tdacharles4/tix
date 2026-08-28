@@ -23,33 +23,33 @@ export default async function PublicEventPage({ params }: Props) {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-12">
-      <h1 className="text-3xl font-bold text-gray-900 mb-2">{event.title}</h1>
-      <p className="text-gray-500 text-sm mb-6">{formatDate(event.date)}</p>
+      <h1 className="text-3xl font-bold mb-2">{event.title}</h1>
+      <p className="text-gray-400 text-sm mb-6">{formatDate(event.date)}</p>
 
-      <div className="border border-gray-200 rounded-xl p-6 mb-6">
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
             <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Lugar</p>
-            <p className="text-gray-900">{event.venue}</p>
+            <p>{event.venue}</p>
           </div>
           <div>
             <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Precio</p>
-            <p className="text-gray-900 font-semibold">{formatMXN(event.price_mxn)}</p>
+            <p className="font-semibold">{formatMXN(event.price_mxn)}</p>
           </div>
         </div>
 
         {event.description && (
-          <p className="text-gray-600 text-sm whitespace-pre-line">{event.description}</p>
+          <p className="text-gray-400 text-sm whitespace-pre-line">{event.description}</p>
         )}
       </div>
 
       <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-gray-400">
           {soldOut ? 'Sin disponibilidad' : `${available} boleto${available === 1 ? '' : 's'} disponible${available === 1 ? '' : 's'}`}
         </p>
 
         {soldOut ? (
-          <button disabled className="bg-gray-200 text-gray-400 px-6 py-3 rounded-lg font-medium cursor-not-allowed">
+          <button disabled className="bg-gray-800 text-gray-500 px-6 py-3 rounded-lg font-medium cursor-not-allowed">
             Agotado
           </button>
         ) : (

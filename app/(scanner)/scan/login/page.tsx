@@ -35,7 +35,7 @@ export default function ScannerLoginPage() {
     <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6">
       {/* Logo */}
       <div className="mb-10 text-center">
-        <p className="text-indigo-400 text-xs tracking-widest uppercase mb-1">Boleteo</p>
+        <p className="text-indigo-400 text-xs tracking-widest uppercase mb-1">Climate Control</p>
         <h1 className="text-white text-2xl font-bold">Panel de Escaneo</h1>
       </div>
 

@@ -21,8 +21,9 @@ export async function middleware(req:NextRequest){
   const isMobile = MOBILE_REGEX.test(ua);
   const isScanner = host === SCANNER_HOST;
 
-  // Scanner
-  if (isScanner){
+  // Scanner — works on subdomain OR main domain via /scan/* paths
+  const isScannerRoute = isScanner || pathname.startsWith('/scan/') || pathname.startsWith('/api/scanner/');
+  if (isScannerRoute) {
     // API routes: skip mobile check, just verify token (login/logout are public)
     if (pathname.startsWith('/api/')) {
       if (pathname === '/api/scanner/login' || pathname === '/api/scanner/logout') {
@@ -34,8 +35,8 @@ export async function middleware(req:NextRequest){
       return NextResponse.next();
     }
 
-    // Page routes: enforce mobile-only
-    if (!isMobile && pathname !== '/scan/desktop-only') {
+    // Page routes: enforce mobile-only on subdomain only (skip on main domain for now)
+    if (isScanner && !isMobile && pathname !== '/scan/desktop-only') {
       return NextResponse.redirect(new URL('/scan/desktop-only', req.url));
     }
     if (pathname === '/scan/login' || pathname === '/scan/desktop-only') {
@@ -47,9 +48,6 @@ export async function middleware(req:NextRequest){
       return NextResponse.redirect(new URL('/scan/login', req.url));
     }
     return NextResponse.next();
-  }
-  if (pathname.startsWith('/scan/')) {
-    return NextResponse.redirect(new URL('/', req.url));
   }
 
   // Supabase

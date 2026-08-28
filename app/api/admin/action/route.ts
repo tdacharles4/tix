@@ -40,10 +40,10 @@ export async function GET(req:NextRequest){
 
         if (profile?.email) {
             await resend.emails.send({
-                from: 'Boletera <onboarding@resend.dev>',
+                from: 'Climate Control <onboarding@resend.dev>',
                 to: profile.email,
-                subject: 'Tu cuenta ha sido aprobada — Boletera',
-                html: `<p>Hola${profile.full_name ? ` ${profile.full_name}` : ''},</p><p>Tu solicitud de acceso a Boletera ha sido aprobada. Ya puedes iniciar sesión.</p>`,
+                subject: 'Tu cuenta ha sido aprobada — Climate Control',
+                html: `<p>Hola${profile.full_name ? ` ${profile.full_name}` : ''},</p><p>Tu solicitud de acceso a Climate Control ha sido aprobada. Ya puedes iniciar sesión.</p>`,
             });
         }
 

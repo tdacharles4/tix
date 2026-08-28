@@ -154,7 +154,7 @@ export default function CheckoutPage() {
     return (
       <form onSubmit={handlePay} className="space-y-5">
         <PaymentElement />
-        {payError && <p className="text-red-600 text-sm">{payError}</p>}
+        {payError && <p className="text-red-400 text-sm">{payError}</p>}
         <button type="submit" disabled={!stripe || paying}
           className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50">
           {paying ? 'Procesando…' : 'Confirmar pago'}
@@ -163,35 +163,35 @@ export default function CheckoutPage() {
     );
   }
 
-  if (tokenValid === null) return <div className="p-8 text-gray-500">Verificando enlace…</div>;
+  if (tokenValid === null) return <div className="p-8 text-gray-400">Verificando enlace…</div>;
 
   if (tokenValid === false) {
     return (
       <div className="max-w-lg mx-auto px-4 py-16 text-center">
-        <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <svg className="w-7 h-7 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="w-14 h-14 bg-red-900/50 rounded-full flex items-center justify-center mx-auto mb-4">
+          <svg className="w-7 h-7 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
         </div>
-        <h1 className="text-xl font-bold text-gray-900 mb-2">Enlace inválido</h1>
-        <p className="text-gray-500 text-sm">{tokenError}</p>
+        <h1 className="text-xl font-bold mb-2">Enlace inválido</h1>
+        <p className="text-gray-400 text-sm">{tokenError}</p>
       </div>
     );
   }
 
-  if (!event) return <div className="p-8 text-gray-500">Cargando evento…</div>;
+  if (!event) return <div className="p-8 text-gray-400">Cargando evento…</div>;
 
   if (clientSecret && checkoutOrderId) {
     return (
       <div className="max-w-3xl mx-auto px-4 py-10">
-        <h1 className="text-2xl font-bold text-gray-900 mb-1">Pago</h1>
-        <p className="text-gray-500 text-sm mb-6">{event.title}</p>
+        <h1 className="text-2xl font-bold mb-1">Pago</h1>
+        <p className="text-gray-400 text-sm mb-6">{event.title}</p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           {/* Left — order summary */}
           <div className="space-y-4">
-            <div className="border border-gray-200 rounded-lg p-4 text-sm">
-              <h3 className="font-semibold text-gray-900 mb-3">Resumen</h3>
-              <div className="flex justify-between mb-2 text-gray-600">
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 text-sm">
+              <h3 className="font-semibold mb-3">Resumen</h3>
+              <div className="flex justify-between mb-2 text-gray-400">
                 <span>Precio × {quantity}</span>
                 <span>{formatMXN(checkoutFees?.ticketSubtotalMxn ?? subtotal)}</span>
               </div>
@@ -203,28 +203,28 @@ export default function CheckoutPage() {
                 <span>Cargo por transacción</span>
                 <span>{formatMXN(checkoutFees?.stripeFeeMxn ?? stripeFee)}</span>
               </div>
-              <div className="flex justify-between font-semibold border-t border-gray-100 pt-2 mt-2">
+              <div className="flex justify-between font-semibold border-t border-gray-800 pt-2 mt-2">
                 <span>Total</span>
                 <span>{formatMXN(checkoutFees?.totalMxn ?? total)}</span>
               </div>
             </div>
 
-            <div className="border border-gray-200 rounded-lg p-4 text-sm">
-              <h3 className="font-semibold text-gray-900 mb-2">Comprador</h3>
-              <p className="text-gray-700">{buyerName}</p>
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 text-sm">
+              <h3 className="font-semibold mb-2">Comprador</h3>
+              <p className="text-gray-300">{buyerName}</p>
               <p className="text-gray-500">{buyerEmail}</p>
             </div>
 
             {holderNames.some((n) => n.trim()) && (
-              <div className="border border-gray-200 rounded-lg p-4 text-sm">
-                <h3 className="font-semibold text-gray-900 mb-2">
+              <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 text-sm">
+                <h3 className="font-semibold mb-2">
                   Titular{holderNames.length > 1 ? 'es' : ''} de boleto
                 </h3>
                 <ul className="space-y-1">
                   {holderNames.map((name, i) => (
-                    <li key={i} className="text-gray-700">
+                    <li key={i} className="text-gray-300">
                       {holderNames.length > 1 && (
-                        <span className="text-gray-400 text-xs mr-1">{i + 1}.</span>
+                        <span className="text-gray-500 text-xs mr-1">{i + 1}.</span>
                       )}
                       {name}
                     </li>
@@ -236,8 +236,8 @@ export default function CheckoutPage() {
 
           {/* Right — Stripe Elements */}
           <div>
-            <h2 className="text-sm font-semibold text-gray-700 mb-4">Método de pago</h2>
-            <Elements stripe={stripePromise} options={{ clientSecret }}>
+            <h2 className="text-sm font-semibold text-gray-300 mb-4">Método de pago</h2>
+            <Elements stripe={stripePromise} options={{ clientSecret, appearance: { theme: 'night', variables: { colorPrimary: '#818cf8' } } }}>
               <CheckoutForm orderId={checkoutOrderId} />
             </Elements>
           </div>
@@ -248,13 +248,13 @@ export default function CheckoutPage() {
 
   return (
     <div className="max-w-lg mx-auto px-4 py-10">
-      <h1 className="text-2xl font-bold text-gray-900 mb-1">Comprar boleto</h1>
-      <p className="text-gray-500 text-sm mb-6">{event.title}</p>
+      <h1 className="text-2xl font-bold mb-1">Comprar boleto</h1>
+      <p className="text-gray-400 text-sm mb-6">{event.title}</p>
 
       {/* Order summary */}
-      <div className="border border-gray-200 rounded-lg p-4 mb-6 text-sm">
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6 text-sm">
         <div className="flex justify-between mb-2">
-          <span className="text-gray-600">Precio × {quantity}</span>
+          <span className="text-gray-400">Precio × {quantity}</span>
           <span>{formatMXN(subtotal)}</span>
         </div>
         <div className="flex justify-between mb-2 text-gray-500">
@@ -265,7 +265,7 @@ export default function CheckoutPage() {
           <span>Cargo por transacción</span>
           <span>{formatMXN(stripeFee)}</span>
         </div>
-        <div className="flex justify-between font-semibold border-t border-gray-100 pt-2 mt-2">
+        <div className="flex justify-between font-semibold border-t border-gray-800 pt-2 mt-2">
           <span>Total</span>
           <span>{formatMXN(total)}</span>
         </div>
@@ -274,41 +274,41 @@ export default function CheckoutPage() {
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* Quantity */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Número de boletos</label>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Número de boletos</label>
           <select value={quantity} onChange={(e) => handleQuantityChange(Number(e.target.value))}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            className="w-full border border-gray-700 bg-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
             {[1,2,3,4,5,6,7,8].map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
 
         {/* Buyer info */}
         <div className="space-y-3">
-          <h3 className="text-sm font-medium text-gray-700">Información del comprador</h3>
+          <h3 className="text-sm font-medium text-gray-300">Información del comprador</h3>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Nombre completo *</label>
+            <label className="block text-xs text-gray-400 mb-1">Nombre completo *</label>
             <input type="text" required value={buyerName} onChange={(e) => setBuyerName(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              className="w-full border border-gray-700 bg-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Correo electrónico *</label>
+            <label className="block text-xs text-gray-400 mb-1">Correo electrónico *</label>
             <input type="email" required value={buyerEmail} onChange={(e) => setBuyerEmail(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              className="w-full border border-gray-700 bg-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Teléfono (opcional)</label>
+            <label className="block text-xs text-gray-400 mb-1">Teléfono (opcional)</label>
             <input type="tel" value={buyerPhone} onChange={(e) => setBuyerPhone(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              className="w-full border border-gray-700 bg-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
         </div>
 
         {/* Holder names — one per ticket */}
         <div className="space-y-3">
-          <h3 className="text-sm font-medium text-gray-700">
+          <h3 className="text-sm font-medium text-gray-300">
             Titular{quantity > 1 ? 'es' : ''} de boleto
           </h3>
           {holderNames.map((name, i) => (
             <div key={i}>
-              <label className="block text-xs text-gray-500 mb-1">
+              <label className="block text-xs text-gray-400 mb-1">
                 Boleto {i + 1}{quantity === 1 ? '' : ` de ${quantity}`} *
               </label>
               <input
@@ -317,7 +317,7 @@ export default function CheckoutPage() {
                 value={name}
                 onChange={(e) => updateHolder(i, e.target.value)}
                 placeholder="Nombre completo del titular"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full border border-gray-700 bg-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
           ))}
@@ -326,7 +326,7 @@ export default function CheckoutPage() {
           )}
         </div>
 
-        {error && <p className="text-red-600 text-sm">{error}</p>}
+        {error && <p className="text-red-400 text-sm">{error}</p>}
 
         <button type="submit" disabled={loading}
           className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50">

@@ -34,9 +34,9 @@ function computePhaseStatuses(phases: PhaseWithTypes[], tickets: Ticket[]): Phas
 }
 
 const statusBadge: Record<PhaseStatus, string> = {
-  activa:  'bg-green-100 text-green-700',
-  proxima: 'bg-yellow-100 text-yellow-700',
-  cerrada: 'bg-gray-100 text-gray-500',
+  activa:  'bg-emerald-900/50 text-emerald-400',
+  proxima: 'bg-yellow-900/50 text-yellow-400',
+  cerrada: 'bg-gray-800 text-gray-500',
 };
 
 const statusLabel: Record<PhaseStatus, string> = {
@@ -100,16 +100,16 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
     setTimeout(() => setSaveSuccess(false), 3000);
   }
 
-  const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500';
+  const inputCls = 'w-full border border-gray-700 bg-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500';
   const tabCls = (active: boolean) =>
     `px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-      active ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+      active ? 'border-indigo-400 text-indigo-400' : 'border-transparent text-gray-500 hover:text-gray-300'
     }`;
 
   return (
     <div>
       {/* Tab bar */}
-      <div className="flex border-b border-gray-200 mb-6">
+      <div className="flex border-b border-gray-800 mb-6">
         <button type="button" onClick={() => setTab('asistentes')} className={tabCls(tab === 'asistentes')}>
           Asistentes
         </button>
@@ -127,22 +127,22 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse">
                 <thead>
-                  <tr className="border-b border-gray-200 text-left">
-                    <th className="pb-3 font-semibold text-gray-600">Folio</th>
-                    <th className="pb-3 font-semibold text-gray-600">Nombre</th>
-                    <th className="pb-3 font-semibold text-gray-600">Correo</th>
-                    <th className="pb-3 font-semibold text-gray-600">Tipo</th>
-                    <th className="pb-3 font-semibold text-gray-600">Estado</th>
-                    <th className="pb-3 font-semibold text-gray-600">Canjeado</th>
+                  <tr className="border-b border-gray-800 text-left">
+                    <th className="pb-3 font-semibold text-gray-400">Folio</th>
+                    <th className="pb-3 font-semibold text-gray-400">Nombre</th>
+                    <th className="pb-3 font-semibold text-gray-400">Correo</th>
+                    <th className="pb-3 font-semibold text-gray-400">Tipo</th>
+                    <th className="pb-3 font-semibold text-gray-400">Estado</th>
+                    <th className="pb-3 font-semibold text-gray-400">Canjeado</th>
                   </tr>
                 </thead>
                 <tbody>
                   {tickets.map((ticket) => (
-                    <tr key={ticket.id} className="border-b border-gray-100 hover:bg-gray-50">
-                      <td className="py-3 font-mono text-xs text-gray-400">{ticket.id.slice(0, 8)}</td>
-                      <td className="py-3 text-gray-900">{ticket.holder_name || orderMap[ticket.order_id] || '—'}</td>
-                      <td className="py-3 text-gray-600">{ticket.buyer_email}</td>
-                      <td className="py-3 text-gray-600">{ticket.ticket_type}</td>
+                    <tr key={ticket.id} className="border-b border-gray-800/50 hover:bg-gray-900/50">
+                      <td className="py-3 font-mono text-xs text-gray-500">{ticket.id.slice(0, 8)}</td>
+                      <td className="py-3">{ticket.holder_name || orderMap[ticket.order_id] || '—'}</td>
+                      <td className="py-3 text-gray-400">{ticket.buyer_email}</td>
+                      <td className="py-3 text-gray-400">{ticket.ticket_type}</td>
                       <td className="py-3">
                         <span className={`px-2 py-1 rounded text-xs font-medium ${statusColors[ticket.status]}`}>
                           {ticket.status}
@@ -167,8 +167,8 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
             <p className="text-gray-500 text-sm py-8 text-center">Este evento no tiene fases configuradas.</p>
           ) : (
             <>
-              {saveSuccess && <p className="text-green-600 text-sm">Cambios guardados.</p>}
-              {saveError   && <p className="text-red-600 text-sm">{saveError}</p>}
+              {saveSuccess && <p className="text-emerald-400 text-sm">Cambios guardados.</p>}
+              {saveError   && <p className="text-red-400 text-sm">{saveError}</p>}
 
               {phases.map((phase, pi) => {
                 const status    = phaseStatuses[pi];
@@ -179,12 +179,12 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
                 );
 
                 return (
-                  <div key={phase.id} className="border border-gray-200 rounded-xl overflow-hidden">
+                  <div key={phase.id} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
 
                     {/* Phase header bar */}
-                    <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-200">
+                    <div className="flex items-center justify-between px-4 py-3 bg-gray-800/50 border-b border-gray-800">
                       <div className="flex items-center gap-3">
-                        <span className="text-sm font-semibold text-gray-800">
+                        <span className="text-sm font-semibold">
                           Fase {pi + 1} · {phase.name || '—'}
                         </span>
                         <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadge[status]}`}>
@@ -194,7 +194,7 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
                       <button
                         type="button"
                         onClick={() => setEditingId(isEditing ? null : phase.id)}
-                        className="text-xs text-indigo-600 hover:underline"
+                        className="text-xs text-indigo-400 hover:underline"
                       >
                         {isEditing ? 'Cancelar' : 'Editar'}
                       </button>
@@ -206,7 +206,7 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
                       {!isEditing && (
                         <>
                           {/* End condition summary */}
-                          <p className="text-xs text-gray-500">
+                          <p className="text-xs text-gray-400">
                             {phase.end_date
                               ? `Fin: ${new Date(phase.end_date).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })}`
                               : 'Sin fecha de fin'}
@@ -223,11 +223,11 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
 
                               return (
                                 <div key={tc.id}>
-                                  <div className="flex justify-between text-xs text-gray-600 mb-1">
-                                    <span className="font-medium">{tc.name}</span>
+                                  <div className="flex justify-between text-xs text-gray-400 mb-1">
+                                    <span className="font-medium text-gray-300">{tc.name}</span>
                                     <span>{sold} / {tc.quantity} vendidos · ${tc.price_mxn} MXN</span>
                                   </div>
-                                  <div className="w-full bg-gray-100 rounded-full h-1.5">
+                                  <div className="w-full bg-gray-800 rounded-full h-1.5">
                                     <div
                                       className="bg-indigo-500 h-1.5 rounded-full transition-all"
                                       style={{ width: `${pct}%` }}
@@ -241,17 +241,17 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
                           {/* Sold tickets */}
                           {phaseTickets.length > 0 && (
                             <div>
-                              <p className="text-xs text-gray-500 mb-2 font-medium">Boletos vendidos</p>
+                              <p className="text-xs text-gray-400 mb-2 font-medium">Boletos vendidos</p>
                               <div className="space-y-1.5">
                                 {phaseTickets.map((t) => (
                                   <div key={t.id} className="flex items-center gap-2 text-xs">
-                                    <span className="font-mono text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded shrink-0">
+                                    <span className="font-mono text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded shrink-0">
                                       {t.id.slice(0, 8)}
                                     </span>
-                                    <span className="font-medium text-gray-700 truncate">
+                                    <span className="font-medium text-gray-300 truncate">
                                       {orderMap[t.order_id] ?? '—'}
                                     </span>
-                                    <span className="text-gray-400 truncate">{t.buyer_email}</span>
+                                    <span className="text-gray-500 truncate">{t.buyer_email}</span>
                                   </div>
                                 ))}
                               </div>
@@ -264,7 +264,7 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
                       {isEditing && (
                         <div className="space-y-4">
                           <div className="flex items-center gap-3">
-                            <label className="text-xs text-gray-500 whitespace-nowrap">Nombre</label>
+                            <label className="text-xs text-gray-400 whitespace-nowrap">Nombre</label>
                             <input
                               type="text"
                               value={phase.name}
@@ -275,7 +275,7 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
 
                           <div className="grid grid-cols-2 gap-3">
                             <div>
-                              <label className="block text-xs text-gray-500 mb-1">Fecha de fin de fase</label>
+                              <label className="block text-xs text-gray-400 mb-1">Fecha de fin de fase</label>
                               <input
                                 type="date"
                                 value={phase.end_date ?? ''}
@@ -291,17 +291,17 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
                                 onChange={(e) => updatePhase(phase.id, 'end_on_sold_out', e.target.checked)}
                                 className="w-4 h-4 accent-indigo-600"
                               />
-                              <label htmlFor={`soldout-${phase.id}`} className="text-xs text-gray-600">
+                              <label htmlFor={`soldout-${phase.id}`} className="text-xs text-gray-400">
                                 Termina al agotar existencias
                               </label>
                             </div>
                           </div>
 
                           {phase.ticket_type_configs.map((tc, ti) => (
-                            <div key={tc.id} className="border border-gray-200 rounded-lg p-3 space-y-3 bg-gray-50">
-                              <span className="text-xs font-medium text-gray-500">Tipo {ti + 1}</span>
+                            <div key={tc.id} className="border border-gray-700 rounded-lg p-3 space-y-3 bg-gray-800/50">
+                              <span className="text-xs font-medium text-gray-400">Tipo {ti + 1}</span>
                               <div>
-                                <label className="block text-xs text-gray-500 mb-1">Nombre</label>
+                                <label className="block text-xs text-gray-400 mb-1">Nombre</label>
                                 <input
                                   type="text"
                                   value={tc.name}
@@ -311,7 +311,7 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
                               </div>
                               <div className="grid grid-cols-3 gap-3">
                                 <div>
-                                  <label className="block text-xs text-gray-500 mb-1">Precio (MXN)</label>
+                                  <label className="block text-xs text-gray-400 mb-1">Precio (MXN)</label>
                                   <input
                                     type="number"
                                     min={0}
@@ -322,7 +322,7 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
                                   />
                                 </div>
                                 <div>
-                                  <label className="block text-xs text-gray-500 mb-1">Cantidad</label>
+                                  <label className="block text-xs text-gray-400 mb-1">Cantidad</label>
                                   <input
                                     type="number"
                                     min={1}
@@ -332,7 +332,7 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
                                   />
                                 </div>
                                 <div>
-                                  <label className="block text-xs text-gray-500 mb-1">Enumerar desde</label>
+                                  <label className="block text-xs text-gray-400 mb-1">Enumerar desde</label>
                                   <input
                                     type="number"
                                     min={1}

@@ -67,7 +67,7 @@ export default function EditEventPage() {
     async function load() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.push('/login'); return; }
+      if (!user) { router.push('/'); return; }
 
       const [{ data: ev }, { data: lugares }] = await Promise.all([
         supabase.from('events').select('*').eq('id', id).single(),
@@ -149,43 +149,43 @@ export default function EditEventPage() {
     router.push(`/dashboard/events/${id}`);
   }
 
-  const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500';
+  const inputCls = 'w-full border border-gray-700 bg-gray-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500';
   const pillCls  = (active: boolean) =>
     `px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-      active ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+      active ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
     }`;
 
-  if (fetching) return <div className="p-8 text-gray-500">Cargando…</div>;
+  if (fetching) return <div className="p-8 text-gray-400">Cargando…</div>;
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Editar evento</h1>
+      <h1 className="text-2xl font-bold mb-6">Editar evento</h1>
 
       <form onSubmit={handleSubmit} className="space-y-5">
 
         {/* Title */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Título *</label>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Título *</label>
           <input type="text" required value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} />
         </div>
 
         {/* Description */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Descripción</label>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Descripción</label>
           <textarea rows={4} value={description} onChange={(e) => setDescription(e.target.value)} className={inputCls} />
         </div>
 
         {/* Date + Times */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Fecha</label>
+          <label className="block text-sm font-medium text-gray-300 mb-2">Fecha</label>
           <DatePicker value={date} onChange={setDate} />
           <div className="grid grid-cols-2 gap-3 mt-3">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Hora de inicio</label>
+              <label className="block text-xs text-gray-400 mb-1">Hora de inicio</label>
               <TimePicker value={timeStart} onChange={setTimeStart} />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Hora de fin</label>
+              <label className="block text-xs text-gray-400 mb-1">Hora de fin</label>
               <TimePicker value={timeEnd} onChange={setTimeEnd} />
             </div>
           </div>
@@ -193,7 +193,7 @@ export default function EditEventPage() {
 
         {/* Location */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Lugar</label>
+          <label className="block text-sm font-medium text-gray-300 mb-2">Lugar</label>
           <div className="flex gap-1.5 mb-3">
             {LOCATION_TYPES.map(({ id: lid, label }) => (
               <button key={lid} type="button" onClick={() => setLocationType(lid)} className={pillCls(locationType === lid)}>
@@ -215,7 +215,7 @@ export default function EditEventPage() {
               {presencialType === 'lugar_unico' && (
                 <div className="space-y-2">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Lugar *</label>
+                    <label className="block text-xs text-gray-400 mb-1">Lugar *</label>
                     <input type="text" required value={venue} onChange={(e) => setVenue(e.target.value)}
                       list="lugares-venue" autoComplete="off" className={inputCls} />
                     <datalist id="lugares-venue">
@@ -223,7 +223,7 @@ export default function EditEventPage() {
                     </datalist>
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">URL de ubicación</label>
+                    <label className="block text-xs text-gray-400 mb-1">URL de ubicación</label>
                     <input type="url" value={venueUrl} onChange={(e) => setVenueUrl(e.target.value)}
                       placeholder="https://maps.google.com/..." className={inputCls} />
                   </div>
@@ -234,7 +234,7 @@ export default function EditEventPage() {
                 <div className="space-y-3">
                   <div className="space-y-2">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Origen *</label>
+                      <label className="block text-xs text-gray-400 mb-1">Origen *</label>
                       <input type="text" required value={venue} onChange={(e) => setVenue(e.target.value)}
                         list="lugares-origen" autoComplete="off" className={inputCls} />
                       <datalist id="lugares-origen">
@@ -242,14 +242,14 @@ export default function EditEventPage() {
                       </datalist>
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">URL de ubicación (origen)</label>
+                      <label className="block text-xs text-gray-400 mb-1">URL de ubicación (origen)</label>
                       <input type="url" value={venueUrl} onChange={(e) => setVenueUrl(e.target.value)}
                         placeholder="https://maps.google.com/..." className={inputCls} />
                     </div>
                   </div>
                   <div className="space-y-2">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Destino *</label>
+                      <label className="block text-xs text-gray-400 mb-1">Destino *</label>
                       <input type="text" required value={destination} onChange={(e) => setDestination(e.target.value)}
                         list="lugares-destino" autoComplete="off" className={inputCls} />
                       <datalist id="lugares-destino">
@@ -257,7 +257,7 @@ export default function EditEventPage() {
                       </datalist>
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">URL de ubicación (destino)</label>
+                      <label className="block text-xs text-gray-400 mb-1">URL de ubicación (destino)</label>
                       <input type="url" value={destinationUrl} onChange={(e) => setDestinationUrl(e.target.value)}
                         placeholder="https://maps.google.com/..." className={inputCls} />
                     </div>
@@ -277,7 +277,7 @@ export default function EditEventPage() {
 
         {/* Status */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Estado</label>
+          <label className="block text-sm font-medium text-gray-300 mb-2">Estado</label>
           <div className="flex gap-1.5">
             {STATUS_OPTIONS.map(({ id: sid, label }) => (
               <button key={sid} type="button" onClick={() => setStatus(sid)} className={pillCls(status === sid)}>
@@ -287,7 +287,7 @@ export default function EditEventPage() {
           </div>
         </div>
 
-        {error && <p className="text-red-600 text-sm">{error}</p>}
+        {error && <p className="text-red-400 text-sm">{error}</p>}
 
         <div className="flex gap-3 pt-2">
           <button type="submit" disabled={loading}
@@ -295,7 +295,7 @@ export default function EditEventPage() {
             {loading ? 'Guardando…' : 'Guardar cambios'}
           </button>
           <button type="button" onClick={() => router.push(`/dashboard/events/${id}`)}
-            className="border border-gray-300 text-gray-700 px-6 py-2 rounded-lg text-sm hover:bg-gray-50">
+            className="border border-gray-700 text-gray-300 px-6 py-2 rounded-lg text-sm hover:bg-gray-800">
             Cancelar
           </button>
         </div>

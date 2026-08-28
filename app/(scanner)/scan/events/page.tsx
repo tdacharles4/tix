@@ -48,7 +48,7 @@ export default function ScannerEventsPage() {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-4 border-b border-gray-800">
         <div>
-          <p className="text-indigo-400 text-xs tracking-widest uppercase">Boleteo</p>
+          <p className="text-indigo-400 text-xs tracking-widest uppercase">Climate Control</p>
           <h1 className="text-white text-lg font-bold">Selecciona tu evento</h1>
         </div>
         <button

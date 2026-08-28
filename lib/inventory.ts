@@ -30,7 +30,7 @@ export async function releaseStaleOrders(eventId: string) {
 
     await supabase
       .from('orders')
-      .update({ status: 'abandoned' })
+      .update({ status: 'failed' })
       .eq('id', order.id)
       .eq('status', 'pending');
   }

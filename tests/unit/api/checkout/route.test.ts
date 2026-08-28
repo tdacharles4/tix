@@ -118,7 +118,7 @@ it('precio de ticket toma precedencia sobre precio de evento', async () => {
         p_buyer_id: null,
         p_buyer_email: 'test@ejemplo.com',
         p_buyer_name: 'Test',
-        p_platform_fee: getPlatformFee(2), // import the real fn, don't hardcode
+        p_platform_fee: getPlatformFee(500, 2), // (unitPrice, quantity)
         p_unit_price_override: 500,
         p_ticket_type_config_id: 'tc1',
     });

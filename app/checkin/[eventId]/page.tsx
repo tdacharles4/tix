@@ -1,24 +1,65 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback, Component, type ReactNode } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 
+/* ── Error Boundary ─────────────────────────────────────────────────────────── */
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6">
+          <div className="w-12 h-12 bg-red-900/50 rounded-full flex items-center justify-center mb-4">
+            <span className="text-red-400 text-2xl">!</span>
+          </div>
+          <h1 className="text-lg font-semibold mb-2">Algo salió mal</h1>
+          <pre className="text-red-400 text-xs bg-gray-900 border border-gray-800 rounded-lg p-4 max-w-full overflow-auto whitespace-pre-wrap mb-4">
+            {this.state.error.message}
+          </pre>
+          <button
+            onClick={() => { this.setState({ error: null }); window.location.reload(); }}
+            className="bg-indigo-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700"
+          >
+            Reiniciar
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+/* ── Types ──────────────────────────────────────────────────────────────────── */
 type ScanResult =
   | { valid: true; ticket: Record<string, unknown>; event: Record<string, unknown>; buyer: Record<string, unknown> }
   | { valid: false; reason: string }
   | null;
 
-export default function CheckinPage() {
+type FlashState = { color: 'green' | 'red' | 'amber'; label: string; sublabel?: string } | null;
+
+/* ── Main Scanner ───────────────────────────────────────────────────────────── */
+function CheckinScanner() {
   const { eventId } = useParams<{ eventId: string }>();
   const scannerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const html5QrcodeRef = useRef<any>(null);
 
   const [scanning, setScanning] = useState(false);
-  const [result, setResult] = useState<ScanResult>(null);
   const [eventTitle, setEventTitle] = useState('');
-  const [lastScanned, setLastScanned] = useState('');
+  const [flash, setFlash] = useState<FlashState>(null);
+  const processingRef = useRef(false);
+
+  const reasonLabels: Record<string, string> = {
+    already_redeemed: 'Ya fue canjeado',
+    cancelled: 'Boleto cancelado',
+    transferred: 'Boleto transferido',
+    not_found: 'No encontrado',
+    wrong_event: 'Otro evento',
+  };
 
   useEffect(() => {
     async function loadEvent() {
@@ -33,22 +74,44 @@ export default function CheckinPage() {
     loadEvent();
   }, [eventId]);
 
+  const showFlash = useCallback((result: NonNullable<ScanResult>) => {
+    if (result.valid) {
+      const name = String(
+        (result.buyer as Record<string, unknown>).full_name ??
+        (result.ticket as Record<string, unknown>).holder_name ??
+        ''
+      );
+      const type = String((result.ticket as Record<string, unknown>).ticket_type ?? '');
+      setFlash({ color: 'green', label: name, sublabel: type });
+    } else {
+      const isAlready = result.reason === 'already_redeemed';
+      setFlash({
+        color: isAlready ? 'amber' : 'red',
+        label: isAlready ? 'Ya escaneado' : 'No válido',
+        sublabel: reasonLabels[result.reason] ?? result.reason,
+      });
+    }
+
+    setTimeout(() => {
+      setFlash(null);
+      setTimeout(() => { processingRef.current = false; }, 300);
+    }, 1500);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function startScanner() {
-    // Dynamically import to avoid SSR issues (html5-qrcode uses browser APIs)
     const { Html5Qrcode } = await import('html5-qrcode');
 
     const html5Qrcode = new Html5Qrcode('qr-reader');
     html5QrcodeRef.current = html5Qrcode;
     setScanning(true);
-    setResult(null);
 
     await html5Qrcode.start(
       { facingMode: 'environment' },
       { fps: 10, qrbox: { width: 250, height: 250 } },
       async (decodedText: string) => {
-        // Avoid re-processing the same scan immediately
-        if (decodedText === lastScanned) return;
-        setLastScanned(decodedText);
+        if (processingRef.current) return;
+        processingRef.current = true;
 
         try {
           const res = await fetch(`/api/tickets/${decodedText}/validate`, {
@@ -57,49 +120,46 @@ export default function CheckinPage() {
             body: JSON.stringify({ eventId }),
           });
           const data = await res.json();
-          setResult(data);
+          showFlash(data);
         } catch {
-          setResult({ valid: false, reason: 'Error de conexión' });
+          showFlash({ valid: false, reason: 'Error de conexión' });
         }
       },
-      () => { /* ignore QR parse errors between frames */ }
+      () => {}
     );
   }
 
   async function stopScanner() {
     if (html5QrcodeRef.current) {
-      await html5QrcodeRef.current.stop();
+      try { await html5QrcodeRef.current.stop(); } catch { /* already stopped */ }
       html5QrcodeRef.current = null;
     }
     setScanning(false);
   }
 
-  function handleScanAnother() {
-    setResult(null);
-    setLastScanned('');
-  }
-
-  const resultBg = result?.valid
-    ? 'bg-emerald-900/30 border-emerald-700'
-    : 'bg-red-900/30 border-red-700';
-
-  const reasonLabels: Record<string, string> = {
-    already_redeemed: 'Ya fue canjeado',
-    cancelled: 'Boleto cancelado',
-    transferred: 'Boleto transferido',
-    not_found: 'Boleto no encontrado',
-    wrong_event: 'Boleto pertenece a otro evento',
-  };
+  const flashBg =
+    flash?.color === 'green' ? 'bg-green-500' :
+    flash?.color === 'amber' ? 'bg-amber-500' :
+    flash?.color === 'red'   ? 'bg-red-500' : '';
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white flex flex-col">
-      <div className="p-4 border-b border-gray-800">
-        <p className="text-xs text-gray-400 uppercase tracking-wide">Check-in</p>
-        <h1 className="text-lg font-semibold">{eventTitle || 'Cargando…'}</h1>
+    <div className={`min-h-screen flex flex-col transition-colors duration-200 ${flash ? flashBg : 'bg-gray-950'}`}>
+      {/* Header */}
+      <div className="p-4 border-b border-white/10">
+        <p className="text-xs text-white/60 uppercase tracking-wide">Check-in</p>
+        <h1 className="text-lg font-semibold text-white">{eventTitle || 'Cargando…'}</h1>
       </div>
 
-      <div className="flex-1 flex flex-col items-center justify-center p-6 gap-6">
-        {/* QR Scanner container */}
+      <div className="flex-1 flex flex-col items-center justify-center p-6 gap-4">
+        {/* Flash info — shows above camera during flash */}
+        {flash && (
+          <div className="text-center">
+            <p className="text-white text-xl font-bold">{flash.label}</p>
+            {flash.sublabel && <p className="text-white/80 text-sm">{flash.sublabel}</p>}
+          </div>
+        )}
+
+        {/* QR Scanner — always visible */}
         <div
           id="qr-reader"
           ref={scannerRef}
@@ -117,58 +177,21 @@ export default function CheckinPage() {
         ) : (
           <button
             onClick={stopScanner}
-            className="border border-gray-600 text-gray-300 px-6 py-2 rounded-xl text-sm hover:bg-gray-800"
+            className="border border-white/20 text-white/70 px-6 py-2 rounded-xl text-sm hover:bg-white/10"
           >
             Detener
           </button>
         )}
-
-        {/* Result card */}
-        {result && (
-          <div className={`w-full max-w-xs border rounded-xl p-5 ${resultBg}`}>
-            {result.valid ? (
-              <div>
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="w-8 h-8 bg-emerald-500 rounded-full flex items-center justify-center">
-                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  </div>
-                  <span className="font-bold text-emerald-400 text-lg">Válido</span>
-                </div>
-                <p className="font-semibold">
-                  {String((result.buyer as Record<string, unknown>).full_name ?? (result.ticket as Record<string, unknown>).buyer_email ?? '')}
-                </p>
-                <p className="text-sm text-gray-400">{String((result.ticket as Record<string, unknown>).ticket_type ?? '')}</p>
-                {Boolean((result.ticket as Record<string, unknown>).seat_label) && (
-                  <p className="text-sm text-gray-400">Asiento: {String((result.ticket as Record<string, unknown>).seat_label)}</p>
-                )}
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-red-500 rounded-full flex items-center justify-center">
-                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </div>
-                <div>
-                  <p className="font-bold text-red-400">No válido</p>
-                  <p className="text-sm text-red-300/80">
-                    {reasonLabels[result.reason] ?? result.reason}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            <button
-              onClick={handleScanAnother}
-              className="mt-4 w-full border border-gray-700 text-gray-300 py-2 rounded-lg text-sm hover:bg-gray-800"
-            >
-              Escanear otro
-            </button>
-          </div>
-        )}
       </div>
     </div>
+  );
+}
+
+/* ── Export with Error Boundary ──────────────────────────────────────────────── */
+export default function CheckinPage() {
+  return (
+    <ErrorBoundary>
+      <CheckinScanner />
+    </ErrorBoundary>
   );
 }

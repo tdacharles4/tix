@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 
@@ -20,11 +20,7 @@ type GuestData = {
   tickets: Guest[];
 };
 
-type ScanResult =
-  | { outcome: 'success'; holderName: string; ticketType: string }
-  | { outcome: 'already_scanned' }
-  | { outcome: 'wrong_event' }
-  | { outcome: 'invalid' };
+type FlashState = { color: 'green' | 'red' | 'amber'; label: string; sublabel?: string } | null;
 
 // ── SVG Donut Chart ──────────────────────────────────────────────────────────
 function DonutChart({ scanned, total }: { scanned: number; total: number }) {
@@ -36,9 +32,7 @@ function DonutChart({ scanned, total }: { scanned: number; total: number }) {
   return (
     <div className="relative flex items-center justify-center">
       <svg width={100} height={100} viewBox="0 0 100 100">
-        {/* Background ring */}
         <circle cx={50} cy={50} r={r} fill="none" stroke="#374151" strokeWidth={10} />
-        {/* Progress arc */}
         {scanned > 0 && (
           <circle
             cx={50} cy={50} r={r} fill="none"
@@ -49,47 +43,10 @@ function DonutChart({ scanned, total }: { scanned: number; total: number }) {
           />
         )}
       </svg>
-      {/* Center label */}
       <div className="absolute text-center">
         <p className="text-white text-lg font-bold leading-none">{scanned}</p>
         <p className="text-gray-500 text-xs">/ {total}</p>
       </div>
-    </div>
-  );
-}
-
-// ── Scan Result Overlay ──────────────────────────────────────────────────────
-function ScanOverlay({ result, onDismiss }: { result: ScanResult; onDismiss: () => void }) {
-  useEffect(() => {
-    const t = setTimeout(onDismiss, 3000);
-    return () => clearTimeout(t);
-  }, [onDismiss]);
-
-  const isSuccess = result.outcome === 'success';
-  const isAlready = result.outcome === 'already_scanned';
-
-  const bg    = isSuccess ? 'bg-green-600' : isAlready ? 'bg-amber-500' : 'bg-red-600';
-  const icon  = isSuccess ? '✓' : isAlready ? '⚠' : '✕';
-  const title =
-    isSuccess ? 'Acceso válido' :
-    isAlready ? 'Ya fue escaneado' :
-    result.outcome === 'wrong_event' ? 'Boleto de otro evento' :
-    'QR inválido';
-
-  return (
-    <div
-      className={`fixed inset-0 ${bg} flex flex-col items-center justify-center z-50`}
-      onClick={onDismiss}
-    >
-      <p className="text-white text-7xl font-bold mb-4">{icon}</p>
-      <p className="text-white text-2xl font-bold mb-2">{title}</p>
-      {result.outcome === 'success' && (
-        <>
-          <p className="text-white text-lg opacity-90">{result.holderName}</p>
-          <p className="text-white text-sm opacity-70 mt-1">{result.ticketType}</p>
-        </>
-      )}
-      <p className="text-white text-xs opacity-50 mt-8">Toca para continuar</p>
     </div>
   );
 }
@@ -101,8 +58,8 @@ export default function ScannerEventPage() {
 
   const [tab,        setTab]        = useState<'dashboard' | 'camera'>('dashboard');
   const [guestData,  setGuestData]  = useState<GuestData | null>(null);
-  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
-  const [cameraKey,  setCameraKey]  = useState(0); // increment to remount camera after scan
+  const [flash,      setFlash]      = useState<FlashState>(null);
+  const [scanLocked, setScanLocked] = useState(false);
   const intervalRef  = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Fetch guest list
@@ -126,8 +83,17 @@ export default function ScannerEventPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, eventId]);
 
+  const showFlash = useCallback((f: NonNullable<FlashState>) => {
+    setFlash(f);
+    setScanLocked(true);
+    setTimeout(() => {
+      setFlash(null);
+      setTimeout(() => setScanLocked(false), 300);
+    }, 1500);
+  }, []);
+
   // Handle QR scan result
-  async function handleScan(ticketId: string) {
+  const handleScan = useCallback(async (ticketId: string) => {
     try {
       const res  = await fetch(`/api/scanner/${eventId}/validate`, {
         method:  'POST',
@@ -138,30 +104,28 @@ export default function ScannerEventPage() {
 
       if (data.valid) {
         const ticket = data.ticket as Record<string, unknown>;
-        setScanResult({
-          outcome:    'success',
-          holderName: (ticket.holder_name as string) ?? 'Titular',
-          ticketType: (ticket.ticket_type as string) ?? '',
+        showFlash({
+          color: 'green',
+          label: (ticket.holder_name as string) ?? 'Titular',
+          sublabel: (ticket.ticket_type as string) ?? '',
         });
+        // Refresh guest data
+        fetchGuests();
       } else {
         const reason = data.reason as string;
-        setScanResult({
-          outcome:
-            reason === 'redeemed'  ? 'already_scanned' :
-            reason === 'wrong_event' ? 'wrong_event' : 'invalid',
+        const isAlready = reason === 'redeemed';
+        showFlash({
+          color: isAlready ? 'amber' : 'red',
+          label: isAlready ? 'Ya escaneado' : reason === 'wrong_event' ? 'Otro evento' : 'No válido',
         });
       }
     } catch {
-      setScanResult({ outcome: 'invalid' });
+      showFlash({ color: 'red', label: 'Error de conexión' });
     }
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventId, showFlash]);
 
-  function dismissScanResult() {
-    setScanResult(null);
-    setCameraKey((k) => k + 1); // remount QrCamera to restart the feed
-  }
-
-  // Sorted guest list: redeemed first (newest), then active alphabetically
+  // Sorted guest list
   const sortedGuests = guestData ? [
     ...guestData.tickets
       .filter(t => t.status === 'redeemed')
@@ -171,15 +135,17 @@ export default function ScannerEventPage() {
       .sort((a, b) => (a.holder_name ?? '').localeCompare(b.holder_name ?? '')),
   ] : [];
 
-  return (
-    <div className="min-h-screen bg-gray-950 flex flex-col">
-      {/* Scan result overlay */}
-      {scanResult && <ScanOverlay result={scanResult} onDismiss={dismissScanResult} />}
+  const flashBg =
+    flash?.color === 'green' ? 'bg-green-500' :
+    flash?.color === 'amber' ? 'bg-amber-500' :
+    flash?.color === 'red'   ? 'bg-red-500' : '';
 
+  return (
+    <div className={`min-h-screen flex flex-col transition-colors duration-200 ${flash ? flashBg : 'bg-gray-950'}`}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
         <div>
-          <button onClick={() => router.push('/scan/events')} className="text-gray-500 text-xs mb-0.5 block">
+          <button onClick={() => router.push('/scan/events')} className="text-white/50 text-xs mb-0.5 block">
             ← Eventos
           </button>
           <p className="text-white text-sm font-semibold truncate max-w-[240px]">
@@ -187,6 +153,14 @@ export default function ScannerEventPage() {
           </p>
         </div>
       </div>
+
+      {/* Flash info above content */}
+      {flash && (
+        <div className="text-center py-2">
+          <p className="text-white text-lg font-bold">{flash.label}</p>
+          {flash.sublabel && <p className="text-white/80 text-sm">{flash.sublabel}</p>}
+        </div>
+      )}
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto pb-20">
@@ -196,7 +170,6 @@ export default function ScannerEventPage() {
               <p className="text-gray-500 text-sm text-center py-12">Cargando…</p>
             ) : (
               <>
-                {/* Stats row */}
                 <div className="flex items-center gap-6 mb-6">
                   <DonutChart scanned={guestData.summary.scanned} total={guestData.summary.total} />
                   <div className="space-y-2">
@@ -211,21 +184,15 @@ export default function ScannerEventPage() {
                   </div>
                 </div>
 
-                {/* Guest list */}
                 <div className="space-y-1">
                   {sortedGuests.length === 0 && (
                     <p className="text-gray-600 text-sm text-center py-8">Sin boletos registrados.</p>
                   )}
                   {sortedGuests.map((guest) => (
-                    <div
-                      key={guest.id}
-                      className="flex items-center gap-3 py-2.5 border-b border-gray-800"
-                    >
-                      <span
-                        className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
-                          guest.status === 'redeemed' ? 'bg-green-500' : 'bg-gray-600'
-                        }`}
-                      />
+                    <div key={guest.id} className="flex items-center gap-3 py-2.5 border-b border-white/10">
+                      <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                        guest.status === 'redeemed' ? 'bg-green-500' : 'bg-gray-600'
+                      }`} />
                       <div className="flex-1 min-w-0">
                         <p className="text-white text-sm font-medium truncate">
                           {guest.holder_name ?? 'Sin nombre'}
@@ -248,12 +215,12 @@ export default function ScannerEventPage() {
         )}
 
         {tab === 'camera' && (
-          <QrCamera key={cameraKey} eventId={eventId} onScan={handleScan} />
+          <QrCamera eventId={eventId} onScan={handleScan} disabled={scanLocked} />
         )}
       </div>
 
       {/* Bottom tab bar */}
-      <div className="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-800 flex">
+      <div className={`fixed bottom-0 left-0 right-0 border-t border-white/10 flex transition-colors duration-200 ${flash ? 'bg-black/20' : 'bg-gray-900'}`}>
         <button
           onClick={() => setTab('dashboard')}
           className={`flex-1 py-4 flex flex-col items-center gap-1 transition-colors ${

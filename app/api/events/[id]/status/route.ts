@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import type { Event } from '@/lib/supabase/types';
 
-const VALID_TRANSITIONS: Record<string, string[]> = {
+const VALID_TRANSITIONS: Record<string, Event['status'][]> = {
   draft: ['live'],
   live:  ['closed', 'cancelled', 'finalizado'],
 };
@@ -40,7 +41,7 @@ export async function PATCH(req: NextRequest, ctx: RouteContext) {
 
   const { error } = await supabase
     .from('events')
-    .update({ status })
+    .update({ status: status as Event['status'] })
     .eq('id', id)
     .eq('organizer_id', user.id);
 

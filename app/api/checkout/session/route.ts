@@ -45,8 +45,8 @@ export async function POST(req: NextRequest) {
 
     if (error) throw new Error(error.message);
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? '';
-    const checkoutUrl = `${appUrl}/checkout/${eventId}?token=${session.id}`;
+    const origin = req.nextUrl.origin;
+    const checkoutUrl = `${origin}/checkout/${eventId}?token=${session.id}`;
 
     return NextResponse.json({ token: session.id, checkoutUrl, expiresAt: session.expires_at });
   } catch (err) {

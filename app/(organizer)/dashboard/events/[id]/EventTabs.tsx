@@ -47,6 +47,7 @@ const statusLabel: Record<PhaseStatus, string> = {
 
 export default function EventTabs({ eventId, tickets, orderMap, statusColors, phases: initialPhases }: Props) {
   const [tab, setTab]               = useState<'asistentes' | 'inventario'>('asistentes');
+  const [searchQuery, setSearchQuery] = useState('');
   const [phases, setPhases]         = useState<PhaseWithTypes[]>(initialPhases);
   const [editingId, setEditingId]   = useState<string | null>(null);
   const [saving, setSaving]         = useState(false);
@@ -109,35 +110,65 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
   return (
     <div>
       {/* Tab bar */}
-      <div className="flex border-b border-gray-800 mb-6">
+      <div className="flex items-center border-b border-gray-800 mb-6">
         <button type="button" onClick={() => setTab('asistentes')} className={tabCls(tab === 'asistentes')}>
           Asistentes
         </button>
         <button type="button" onClick={() => setTab('inventario')} className={tabCls(tab === 'inventario')}>
           Inventario de Boletos
         </button>
+
+        {tab === 'asistentes' && (
+          <div className="ml-auto relative">
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Buscar por nombre o correo…"
+              className="w-64 border border-gray-700 bg-gray-800 rounded-lg pl-9 pr-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+        )}
       </div>
 
       {/* ── Asistentes ── */}
-      {tab === 'asistentes' && (
-        <>
-          {!tickets.length ? (
-            <p className="text-gray-500 text-sm py-8 text-center">Aún no hay boletos vendidos.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="border-b border-gray-800 text-left">
-                    <th className="pb-3 font-semibold text-gray-400">Folio</th>
-                    <th className="pb-3 font-semibold text-gray-400">Nombre</th>
-                    <th className="pb-3 font-semibold text-gray-400">Correo</th>
-                    <th className="pb-3 font-semibold text-gray-400">Tipo</th>
-                    <th className="pb-3 font-semibold text-gray-400">Estado</th>
-                    <th className="pb-3 font-semibold text-gray-400">Canjeado</th>
+      {tab === 'asistentes' && (() => {
+        const q = searchQuery.toLowerCase().trim();
+        const filtered = q
+          ? tickets.filter((t) => {
+              const name = (t.holder_name || orderMap[t.order_id] || '').toLowerCase();
+              const email = (t.buyer_email || '').toLowerCase();
+              return name.includes(q) || email.includes(q);
+            })
+          : tickets;
+
+        return !tickets.length ? (
+          <p className="text-gray-500 text-sm py-8 text-center">Aún no hay boletos vendidos.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b border-gray-800 text-left">
+                  <th className="pb-3 font-semibold text-gray-400">Folio</th>
+                  <th className="pb-3 font-semibold text-gray-400">Nombre</th>
+                  <th className="pb-3 font-semibold text-gray-400">Correo</th>
+                  <th className="pb-3 font-semibold text-gray-400">Tipo</th>
+                  <th className="pb-3 font-semibold text-gray-400">Estado</th>
+                  <th className="pb-3 font-semibold text-gray-400">Canjeado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-8 text-center text-gray-500 text-sm">
+                      Sin resultados para &ldquo;{searchQuery}&rdquo;
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {tickets.map((ticket) => (
+                ) : (
+                  filtered.map((ticket) => (
                     <tr key={ticket.id} className="border-b border-gray-800/50 hover:bg-gray-900/50">
                       <td className="py-3 font-mono text-xs text-gray-500">{ticket.id.slice(0, 8)}</td>
                       <td className="py-3">{ticket.holder_name || orderMap[ticket.order_id] || '—'}</td>
@@ -152,13 +183,13 @@ export default function EventTabs({ eventId, tickets, orderMap, statusColors, ph
                         {ticket.redeemed_at ? new Date(ticket.redeemed_at).toLocaleString('es-MX') : '—'}
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      )}
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        );
+      })()}
 
       {/* ── Inventario de Boletos ── */}
       {tab === 'inventario' && (
